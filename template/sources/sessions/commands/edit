@@ -1,0 +1,19 @@
+#!/bin/zsh
+# sessions.edit {prompt}: runs Claude Code on this folder, then commits its changes with the prompt as the message.
+prompt=$SWB_ARG_PROMPT
+finish() {
+  local s=${2//\\/\\\\}; s=${s//\"/\\\"}; s=${s//[[:cntrl:]]/ }
+  print -r -- "{\"outcome\": \"$1\", \"summary\": \"$s\"}"
+  [[ $1 == success ]]; exit
+}
+[[ -n $prompt ]] || finish failure "prompt is required"
+printf %s $prompt | claude -p --settings $SOURCE_DIR/files/claude-hooks.json --permission-mode acceptEdits \
+  --allowedTools 'Bash(swb check)' 'Bash(swb query:*)' 'Bash(sqlite3:*)' 'Bash(git status:*)' 'Bash(git diff:*)' 'Bash(git log:*)' \
+  || finish failure "claude exited with $?"
+git add -A
+git diff --cached --quiet && finish success "no changes"
+if ! out=$(git commit -q -m $prompt 2>&1); then
+  git reset -q
+  finish failure "not committed, changes left in the folder: $out"
+fi
+finish success "committed $(git rev-parse --short HEAD)"

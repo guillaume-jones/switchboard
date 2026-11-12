@@ -1,0 +1,18 @@
+[package]
+name = "switchboard-core"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono = "0.4.45"
+croner = "4.0.3"
+include_dir = "0.7"
+libc = "0.2.191"
+notify = "8"
+oxc.workspace = true
+rusqlite = { version = "0.41", features = ["backup", "bundled", "column_decltype", "hooks"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

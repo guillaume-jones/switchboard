@@ -1,0 +1,8 @@
+{
+  "id": "attention-notify",
+  "when": { "view": "attention_notify" },
+  "key": "{id}@{woken_at}",
+  "run": "core.notify",
+  "args": { "title": "{ref}", "body": "{reason}" },
+  "max_per_hour": 60
+}

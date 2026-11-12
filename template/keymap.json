@@ -1,0 +1,8 @@
+[
+  { "key": "cmd-k", "command": "palette.open" },
+  { "key": "cmd-shift-k", "command": "keymap.context" },
+  { "key": "alt-j", "command": "card.focus_next" },
+  { "key": "alt-k", "command": "card.focus_prev" },
+  { "key": "cmd-]", "context": "card:Boards", "write": "ui.next_board" },
+  { "key": "cmd-[", "context": "card:Boards", "write": "ui.prev_board" }
+]

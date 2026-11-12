@@ -1,0 +1,7 @@
+{
+  "id": "attention-blocked",
+  "when": { "view": "attention_blocked" },
+  "key": "{id}",
+  "into": "attention.raise",
+  "args": { "ref": "core:{rule}", "reason": "{blocked}; blocked firing {key}", "level": 2 }
+}

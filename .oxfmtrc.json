@@ -1,0 +1,8 @@
+{
+  "$schema": "./app/node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 120,
+  "semi": false,
+  "singleQuote": true,
+  "arrowParens": "avoid",
+  "ignorePatterns": ["app/src-tauri/gen", "app/package-lock.json"]
+}

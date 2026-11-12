@@ -1,0 +1,24 @@
+CREATE TABLE boards (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  component TEXT NOT NULL,
+  props TEXT NOT NULL DEFAULT '{}',
+  position INTEGER NOT NULL
+);
+
+CREATE TABLE current (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  board TEXT
+);
+
+CREATE TABLE tiles (
+  grid TEXT NOT NULL,
+  id TEXT NOT NULL,
+  component TEXT NOT NULL,
+  props TEXT NOT NULL DEFAULT '{}',
+  x INTEGER NOT NULL,
+  y INTEGER NOT NULL,
+  w INTEGER NOT NULL,
+  h INTEGER NOT NULL,
+  PRIMARY KEY (grid, id)
+);

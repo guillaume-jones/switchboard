@@ -1,0 +1,89 @@
+:root {
+  color-scheme: light dark;
+  font:
+    13px/1.4 system-ui,
+    -apple-system,
+    sans-serif;
+}
+body {
+  margin: 0;
+  background: var(--bg, Canvas);
+  color: var(--fg, CanvasText);
+}
+.slot {
+  display: contents;
+}
+.slot .slot.focused > * {
+  outline: 1px solid var(--accent, Highlight);
+  outline-offset: -1px;
+}
+.muted {
+  color: var(--muted, GrayText);
+}
+.card-error {
+  color: var(--bad, #d33);
+  padding: 6px;
+  font-size: 12px;
+}
+.card-error pre {
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+  color: var(--muted, GrayText);
+}
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: #0005;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  z-index: 10;
+}
+.panel {
+  background: var(--bg, Canvas);
+  border: 1px solid var(--border, GrayText);
+  border-radius: 8px;
+  width: min(640px, 90vw);
+  max-height: 70vh;
+  overflow: auto;
+  padding: 6px;
+}
+.panel > input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px;
+  margin-bottom: 4px;
+}
+.panel p {
+  margin: 8px 0 4px;
+}
+.row {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 3px 6px;
+  border-radius: 4px;
+}
+.row.sel {
+  background: var(--accent, Highlight);
+  color: #fff;
+}
+.row.sel .muted {
+  color: #fffc;
+}
+.row.off {
+  opacity: 0.4;
+}
+.notice {
+  position: fixed;
+  right: 8px;
+  bottom: 8px;
+  max-width: 50vw;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--bad, #d33);
+  color: #fff;
+  z-index: 11;
+}

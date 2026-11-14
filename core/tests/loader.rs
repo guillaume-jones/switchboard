@@ -392,6 +392,32 @@ fn rule_and_keymap_validation() {
 }
 
 #[test]
+fn trigger_validation() {
+    let mut files = PRS.to_vec();
+    files.extend([
+        ("rules/a.json", r#"{"id": "a", "when": {"schedule": "* * * * *", "system": "wake"}, "run": "core.snapshot"}"#),
+        ("rules/b.json", r#"{"id": "b", "when": {"system": "reboot"}, "run": "core.snapshot"}"#),
+        ("rules/c.json", r#"{"id": "c", "when": {"files": "logs/*.log"}, "run": "core.snapshot"}"#),
+        ("rules/d.json", r#"{"id": "d", "when": {"view": "prs_items", "line_contains": "x"}, "key": "{id}", "run": "core.snapshot"}"#),
+        ("rules/e.json", r#"{"id": "e", "when": {"files": "/tmp/*.log"}, "into": "prs.upsert", "args": {"id": 1, "title": "{line}"}}"#),
+        ("rules/f.json", r#"{"id": "f", "when": {"files": "/tmp/*.log", "line_contains": "ERROR"}, "into": "prs.upsert", "args": {"id": 1, "title": "{path}: {line}"}}"#),
+        ("rules/g.json", r#"{"id": "g", "when": {"system": "unlock"}, "into": "prs.upsert", "args": {"id": 1, "title": "{event}"}}"#),
+    ]);
+    let h = home(&files);
+    let e = errors(h.path());
+    for expected in [
+        "rules/a.json: error: a rule takes at most one trigger, got when.schedule, when.system",
+        "rules/b.json: error: when.system \"reboot\" is not a system event (expected sleep, wake, lock, unlock, online, offline)",
+        "rules/c.json: error: when.files \"logs/*.log\" must be an absolute path or start with ~/",
+        "rules/d.json: error: when.line_contains needs when.files",
+        "rules/e.json: error: {line} is not a variable of the trigger (variables: path)",
+    ] {
+        assert!(e.contains(expected), "missing {expected:?} in\n{e}");
+    }
+    assert!(!e.contains("rules/f.json") && !e.contains("rules/g.json"), "{e}");
+}
+
+#[test]
 fn cards_compile_with_lib_helpers() {
     let h = home(&[
         (

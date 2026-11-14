@@ -9,6 +9,9 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 
+#[cfg(target_os = "macos")]
+mod system_events;
+
 struct App {
     engine: RwLock<Result<Engine, String>>,
     subs: Mutex<HashSet<u64>>,
@@ -228,6 +231,15 @@ fn main() {
             *app.state::<App>().engine.write().unwrap() = opened;
             menu_bar(&handle);
             hotkey(&handle);
+            #[cfg(target_os = "macos")]
+            {
+                let handle = handle.clone();
+                system_events::observe(move |event| {
+                    if let Ok(engine) = &*handle.state::<App>().engine.read().unwrap() {
+                        engine.system_event(event);
+                    }
+                });
+            }
             let _ = app.notification().on_action(move |_| forward(&handle));
             Ok(())
         })

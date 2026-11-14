@@ -2,8 +2,9 @@
 //! queued runs, writes the batch's events, commits, then re-runs the reads the batch dirtied.
 
 use super::reads::{DirtyTables, bind, query_rows, reject_unknown_params};
+use super::triggers::Occurrence;
 use super::{Child, Event, EventKind, ExitReport, ExitState, Message, Origin, Shared, display_text};
-use crate::loader::{Action, Builtin, Loaded, Rule, Writer, template_vars};
+use crate::loader::{Action, Builtin, Loaded, Rule, Trigger, Writer, template_vars};
 use crate::runner::{Job, PayloadWriter};
 use crate::{DAY_MS, millis, now_ms};
 use anyhow::{Result, anyhow, bail};
@@ -20,8 +21,8 @@ use std::time::Duration;
 
 const HOUR_MS: i64 = 3_600_000;
 const BEGIN_RETRY_DELAY: Duration = Duration::from_millis(100);
-/// Firings keyed by schedule slot are only needed until their slot cannot recur.
-const SLOT_FIRING_RETENTION_MS: i64 = 7 * DAY_MS;
+/// Firings keyed by a trigger occurrence are only needed until it cannot recur.
+const OCCURRENCE_FIRING_RETENTION_MS: i64 = 7 * DAY_MS;
 
 pub(super) struct WriteLoop {
     shared: Arc<Shared>,
@@ -185,6 +186,7 @@ impl WriteLoop {
                         batch.events.push(Event::error("engine", "tick", format!("{e:#}")));
                     }
                 }
+                Message::Triggered(occurrence) => batch.triggered(&occurrence),
                 Message::Reload => settled.reload = true,
                 Message::Stop => settled.stop = true,
             }
@@ -379,7 +381,7 @@ impl Batch<'_> {
             )?;
             return Ok(Fired::Continue);
         }
-        if rule.watch.is_some() {
+        if rule.watch.is_some() || matches!(rule.trigger, Some(Trigger::Files(_))) {
             let max_per_hour = rule.max_per_hour.unwrap_or(settings.max_per_hour);
             let runs_last_hour: i64 = self
                 .conn
@@ -418,7 +420,7 @@ impl Batch<'_> {
         let trigger = format!("rule:{}", rule.id);
         let (command, inline_writer) = match &rule.action {
             Action::Write { writer } if rule.watch.is_none() => {
-                // A schedule-only writer rule records only its firing, and its writes start a new lineage.
+                // A writer rule without a view records only its firing, and its writes start a new lineage.
                 let _ = self.write(writer, &args, &Origin { trigger, run_id: None });
                 return Ok(Fired::Continue);
             }
@@ -439,6 +441,50 @@ impl Batch<'_> {
             self.core_write("run_exit", json!({ "id": run_id, "state": state.as_str(), "summary": summary }))?;
         }
         Ok(Fired::Continue)
+    }
+
+    /// Fires the rules a file change or system event triggers.
+    fn triggered(&mut self, occurrence: &Occurrence) {
+        let loaded = self.loaded;
+        for rule in loaded.rules.values() {
+            let occurrences: Vec<(String, Value)> = match (&rule.trigger, occurrence) {
+                (Some(Trigger::Files(files)), Occurrence::File { path, lines }) if files.matches(path) => {
+                    let path = path.to_string_lossy();
+                    match &files.line_contains {
+                        None => vec![(format!("file:{path}@{}", now_ms()), json!({ "path": path }))],
+                        Some(needle) => lines
+                            .iter()
+                            .filter(|(_, line)| line.contains(needle.as_str()))
+                            .map(|(offset, line)| {
+                                (format!("file:{path}@{offset}"), json!({ "path": path, "line": line }))
+                            })
+                            .collect(),
+                    }
+                }
+                (Some(Trigger::System(event)), Occurrence::System(occurred)) if event == occurred => {
+                    let event = event.as_str();
+                    vec![(format!("system:{event}@{}", now_ms()), json!({ "event": event }))]
+                }
+                _ => continue,
+            };
+            for (key, vars) in occurrences {
+                if let Err(e) = self.occur(rule, &key, &vars) {
+                    self.events.push(Event::error("engine", &rule.id, format!("{e:#}")));
+                }
+            }
+        }
+    }
+
+    /// One occurrence of the rule's trigger: re-evaluates its view, or fires it once.
+    fn occur(&mut self, rule: &Rule, key: &str, vars: &Value) -> Result<()> {
+        match &rule.watch {
+            Some(watch) => {
+                let rows = query_rows(self.conn, &format!("SELECT * FROM \"{}\"", watch.view), &[])?.rows;
+                self.evaluate(&rule.id, &rows, &[])
+            }
+            None if rule_state(self.conn, &rule.id)?.enabled => self.fire(rule, key, vars, &[]).map(drop),
+            None => Ok(()),
+        }
     }
 
     /// Starts queued runs, keeping at most `max_concurrency` rule runs running (`core.notify` is exempt).
@@ -552,7 +598,7 @@ impl Batch<'_> {
         let local = chrono::DateTime::from_timestamp_millis(now).unwrap_or_default().with_timezone(&chrono::Local);
         let loaded = self.loaded;
         for rule in loaded.rules.values() {
-            let Some(cron) = &rule.schedule else { continue };
+            let Some(Trigger::Schedule(cron)) = &rule.trigger else { continue };
             let state = rule_state(self.conn, &rule.id)?;
             if !state.enabled {
                 continue;
@@ -564,13 +610,7 @@ impl Batch<'_> {
             else {
                 continue;
             };
-            match &rule.watch {
-                Some(watch) => {
-                    let rows = query_rows(self.conn, &format!("SELECT * FROM \"{}\"", watch.view), &[])?.rows;
-                    self.evaluate(&rule.id, &rows, &[])?;
-                }
-                None => _ = self.fire(rule, &format!("slot:{}", slot.format("%Y-%m-%dT%H:%M")), &Value::Null, &[])?,
-            }
+            self.occur(rule, &format!("slot:{}", slot.format("%Y-%m-%dT%H:%M")), &Value::Null)?;
         }
         for (rule, at) in std::mem::take(&mut self.memory.last_evaluated) {
             self.core_write("rule_evaluated", json!({ "rule": rule, "at": at }))?;
@@ -607,7 +647,10 @@ impl Batch<'_> {
         for id in trimmed {
             let _ = fs::remove_file(self.shared.home.join(format!("data/logs/{id}.log")));
         }
-        self.core_write("trim", json!({ "before": before, "slots_before": now - SLOT_FIRING_RETENTION_MS }))?;
+        self.core_write(
+            "trim",
+            json!({ "before": before, "occurrences_before": now - OCCURRENCE_FIRING_RETENTION_MS }),
+        )?;
         // With only the core source loaded, every other database would look orphaned.
         if self.shared.folder_loaded.load(SeqCst) {
             crate::maintenance::trash_orphaned_databases(&self.shared.home, loaded, now);

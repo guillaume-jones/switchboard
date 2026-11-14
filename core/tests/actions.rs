@@ -1,4 +1,4 @@
-use switchboard_core::{Emitter, Engine, Origin};
+use switchboard_core::{Emitter, Engine, Origin, SystemEvent};
 use serde_json::{Value, json};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -742,4 +742,70 @@ fn a_core_db_with_the_old_attention_table_still_opens() {
     let left: i64 =
         db.query_row("SELECT count(*) FROM sqlite_schema WHERE name LIKE 'attention%'", [], |r| r.get(0)).unwrap();
     assert_eq!(left, 0);
+}
+
+#[test]
+fn file_rules_fire_on_changes_and_on_appended_matching_lines() {
+    let watched = tempfile::tempdir().unwrap();
+    let log = watched.path().join("app.log");
+    fs::write(&log, "ERROR before the engine started\n").unwrap();
+    let pattern = watched.path().join("*.log").display().to_string();
+    let h = home(&[
+        (
+            "rules/changed.json",
+            &format!(r#"{{"id": "changed", "when": {{"files": "{pattern}"}}, "into": "log.note", "args": {{"key": "changed"}}}}"#),
+        ),
+        (
+            "rules/errors.json",
+            &format!(r#"{{"id": "errors", "when": {{"files": "{pattern}", "line_contains": "ERROR"}}, "into": "log.note", "args": {{"key": "{{line}}"}}}}"#),
+        ),
+    ]);
+    let (engine, _rx) = open(h.path());
+    until(&engine, "core_rules", json!({"rule": "errors"}), 5, |r| r.len() == 1);
+    std::thread::sleep(Duration::from_millis(300));
+    let append = |text: &[u8]| {
+        std::io::Write::write_all(&mut fs::OpenOptions::new().append(true).open(&log).unwrap(), text).unwrap()
+    };
+    append(b"ok\nERROR one\nERROR two\nERROR partial");
+    let notes = until(&engine, "log_notes", json!({}), 5, |r| r.len() == 3);
+    let keys: Vec<&str> = notes.iter().map(|n| n["key"].as_str().unwrap()).collect();
+    assert_eq!(keys.iter().filter(|k| **k == "changed").count(), 1, "{keys:?}");
+    assert!(keys.contains(&"ERROR one") && keys.contains(&"ERROR two"), "{keys:?}");
+    append(b" ends\n");
+    let notes = until(&engine, "log_notes", json!({}), 5, |r| r.len() == 5);
+    assert!(notes.iter().any(|n| n["key"] == "ERROR partial ends"), "{notes:?}");
+}
+
+#[test]
+fn system_rules_fire_and_offline_waits_for_its_debounce() {
+    let rule = |event: &str| {
+        format!(r#"{{"id": "{event}", "when": {{"system": "{event}"}}, "into": "log.note", "args": {{"key": "{{event}}"}}}}"#)
+    };
+    let (wake, offline, online) = (rule("wake"), rule("offline"), rule("online"));
+    let h = home(&[
+        ("settings.json", r#"{"offline_debounce": 1}"#),
+        ("rules/wake.json", &wake),
+        ("rules/offline.json", &offline),
+        ("rules/online.json", &online),
+    ]);
+    let (engine, _rx) = open(h.path());
+    let keys = || -> Vec<String> {
+        let notes = engine.query("log_notes", json!({})).unwrap();
+        notes.as_array().unwrap().iter().map(|n| n["key"].as_str().unwrap().to_string()).collect()
+    };
+    engine.system_event(SystemEvent::Wake);
+    until(&engine, "log_notes", json!({}), 5, |r| r.len() == 1);
+    engine.system_event(SystemEvent::Online);
+    engine.system_event(SystemEvent::Offline);
+    std::thread::sleep(Duration::from_millis(300));
+    engine.system_event(SystemEvent::Online);
+    std::thread::sleep(Duration::from_millis(1200));
+    assert_eq!(keys(), ["wake"], "a brief drop fires nothing");
+    engine.system_event(SystemEvent::Offline);
+    until(&engine, "log_notes", json!({}), 5, |r| r.len() == 2);
+    engine.system_event(SystemEvent::Offline);
+    engine.system_event(SystemEvent::Online);
+    until(&engine, "log_notes", json!({}), 5, |r| r.len() == 3);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(keys(), ["wake", "offline", "online"]);
 }

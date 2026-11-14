@@ -58,13 +58,17 @@ Conventions: primary key on every table; provider JSON kept in `raw` and exposed
 | `id` | unique across all rules |
 | `when.view` | evaluated on load and whenever its result changes; fires once per new rendered `key`, ever |
 | `when.schedule` | 5-field local cron. With a view, re-evaluates it; alone, fires once per slot (after sleep, only the latest missed slot; a new rule waits for its next slot) |
-| `key` | required with `when.view`, forbidden without; `{col}` templates over the view's columns |
+| `when.files` | absolute or `~/` glob (`*` stays within one directory, `**` crosses them). Fires once a matching file changed and stayed quiet for 200 ms; gives `{path}`. A missing base directory is skipped until the next reload |
+| `when.line_contains` | with `when.files`: fires once per complete line appended to a matching file that contains this text, instead of per change; gives `{path}` and `{line}`. Lines present when the rule loads never fire |
+| `when.system` | `sleep`, `wake`, `lock`, `unlock`, `online` or `offline`; gives `{event}`. `offline` fires after the network stays unreachable for `offline_debounce`, `online` only after an `offline` |
+| (triggers) | at most one of `schedule`, `files`, `system`. With a view, an occurrence re-evaluates it; alone, the rule fires once per occurrence |
+| `key` | required with `when.view`, forbidden without; `{col}` templates over the view's columns, else over the trigger's variables |
 | `run` | a command or built-in command |
 | `into` | a writer. With `run`: gets stdout as `:payload` if the command succeeds. Alone: called with `args`, which must match its params exactly |
 | `args` | `"{col}"` passes the typed value; other strings are interpolated |
 | `max_per_hour`, `timeout` | per-rule overrides |
 
-Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs in an hour for a rule with `when.view`, the firing is blocked, recorded in `core_firings` and its key consumed; the rate limit also disables the rule until `core.rule_enable {rule}`. At most `max_concurrency` rule runs execute at once; others queue. Runs started by hand are never limited.
+Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs in an hour for a rule with `when.view` or `when.files`, the firing is blocked, recorded in `core_firings` and its key consumed; the rate limit also disables the rule until `core.rule_enable {rule}`. At most `max_concurrency` rule runs execute at once; others queue. Runs started by hand are never limited.
 
 ## Commands
 
@@ -88,6 +92,7 @@ Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs in an hou
 | `max_per_hour` / `max_depth` / `max_concurrency` | `20` / `5` / `4` | rule limits |
 | `timeout` | `600` | command timeout |
 | `open_run_expiry` | `86400` | |
+| `offline_debounce` | `3` | how long the network must stay unreachable before `when.system: offline` fires |
 | `snapshot_interval` / `snapshot_retention` | `3600` / `604800` | |
 | `retention` | `2592000` | events and finished runs |
 | `depth_cap` | `20` | card nesting |

@@ -108,13 +108,15 @@ Source names are `[a-z][a-z0-9]*` (no `_`, since views are `<source>_<file>`). A
 
 - `when.view` is evaluated on load and whenever its result hash changes after a write. It fires once per new rendered key; seen keys live in `core.firings`.
 - `when.schedule` is a local cron checked every minute. With a view, it re-evaluates the view; alone, it fires once per slot keyed `slot:<time>`. After sleep, only the most recent missed slot fires; a new rule starts at its next slot.
-- `run` starts a command; `into` names a writer that receives the command's stdout as `:payload`. A rule with only `into` calls the writer with `args`: with a view this still records a run (so depth applies), while a schedule-only writer rule records only its firing, writes with origin `rule:<id>` and no run, and starts a new lineage.
+- `when.files` is a glob watched outside the folder. A matching file fires once it has been quiet for 200 ms, keyed `file:<path>@<time>`; with `when.line_contains`, once per appended complete line containing the text, keyed `file:<path>@<offset>`. Offsets start at each file's length when the rules load, so existing content never fires.
+- `when.system` fires on `sleep`, `wake`, `lock`, `unlock`, `online` and `offline`, keyed `system:<event>@<time>`. The app observes them and calls `Engine::system_event`; core debounces `offline` by `offline_debounce` and drops the `online` that ends a brief drop. A rule takes at most one of `schedule`, `files` and `system`, and like a schedule, each occurrence re-evaluates its view or fires it once.
+- `run` starts a command; `into` names a writer that receives the command's stdout as `:payload`. A rule with only `into` calls the writer with `args`: with a view this still records a run (so depth applies), while a writer rule without a view records only its firing, writes with origin `rule:<id>` and no run, and starts a new lineage.
 - Schedules are the only time mechanism. The loader warns when a rule watches a `now`-dependent view without a schedule.
 
 Limits, all computed from `core` tables:
 
 - **Depth:** a firing caused by writes from runs takes the deepest of those runs as parent. Past `max_depth` (5) it is blocked. `RUN_ID` reaches everything a command starts, and `swb write` forwards it.
-- **Rate:** a rule with `when.view` that has started `max_per_hour` runs in the last hour is blocked and disabled until `core.rule_enable`. Schedule-only rules are bounded by their cron.
+- **Rate:** a rule with `when.view` or `when.files` that has started `max_per_hour` runs in the last hour is blocked and disabled until `core.rule_enable`. Schedule and system rules are bounded by their cron and the machine.
 - **Concurrency:** at most `max_concurrency` rule runs are `running` (`core.notify` exempt); the rest stay `queued`.
 - A blocked firing records its reason and consumes its key; retrying is manual. Runs started by hand are never limited.
 
@@ -159,7 +161,7 @@ Embedded in the binary, written only by the engine, and the only source whose sc
   open → unknown                (open_run_expiry)
   ```
   Exit code sets the state; a last stdout line `{outcome, summary}` refines it (except for `into` runs).
-- **`firings`:** rule, key (unique together), run, time, blocked reason, commit. Kept long-term except `slot:` keys, trimmed after 7 days.
+- **`firings`:** rule, key (unique together), run, time, blocked reason, commit. Kept long-term except trigger occurrence keys (`slot:`, `file:`, `system:`), trimmed after 7 days.
 - **`rules`:** enabled, disabled reason, last evaluated.
 - **`events`:** writes that changed rows (with trigger and run), errors of every kind (`loader`, `sql`, `card_runtime`, `spool`, `runner`, …), and reads slower than 100 ms. The engine's own bookkeeping writes produce no events.
 - **Views:** `core_runs`, `core_firings`, `core_rules`, `core_items` (rules as `core:<rule>` refs) and `core_events` expose every row and never filter; consumers filter on top. Indexes cover the common filters (`kind`, `run_id`, `name`, `state`, `rule`). Mounting a view over a growing table re-sends the whole result after every write unless its filter keeps the result small; for recent history, cards use a query with a limit.

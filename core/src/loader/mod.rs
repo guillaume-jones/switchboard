@@ -9,7 +9,7 @@ mod sql_files;
 mod sql_text;
 
 pub use cards::CardBundle;
-pub use config::{Action, Rule, Settings, SourceConfig, Watch};
+pub use config::{Action, FileWatch, Rule, Settings, SourceConfig, SystemEvent, Trigger, Watch};
 
 use config::RuleContext;
 use include_dir::{Dir, include_dir};

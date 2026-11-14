@@ -2,9 +2,10 @@
 //! tables, and rules are evaluated on the writer thread from the results.
 
 mod reads;
+mod triggers;
 mod writes;
 
-use crate::loader::{BUILTINS, Diagnostic, Loaded, Mode, load, load_core_only};
+use crate::loader::{BUILTINS, Diagnostic, Loaded, Mode, SystemEvent, load, load_core_only};
 use anyhow::{Context, Result, anyhow, bail};
 use notify::{RecursiveMode, Watcher};
 use reads::{ReaderPool, Subscriptions};
@@ -161,6 +162,7 @@ pub(crate) enum Message {
         summary: Option<String>,
     },
     Tick(i64),
+    Triggered(triggers::Occurrence),
     Reload,
     Stop,
 }
@@ -169,6 +171,7 @@ pub(crate) struct Shared {
     pub(crate) home: PathBuf,
     emitter: Box<dyn Emitter>,
     pub(crate) tx: Sender<Message>,
+    triggers: triggers::Triggers,
     loaded: RwLock<Arc<Loaded>>,
     load_errors: RwLock<Vec<Diagnostic>>,
     /// False while only the core source runs because the folder failed to load at startup.
@@ -263,8 +266,12 @@ impl Shared {
         }
     }
 
-    /// Registers the rules' views as active reads, evaluates them, and records the rule set in `core.rules`.
+    /// Registers the rules' views as active reads, evaluates them, watches their files, and records the rule set in
+    /// `core.rules`.
     fn sync_rules(&self, loaded: &Loaded) {
+        for e in self.triggers.watch(loaded) {
+            self.record(Event::error("engine", "when.files", format!("{e:#}")));
+        }
         if self.folder_loaded.load(SeqCst) {
             let rules: Vec<&String> = loaded.rules.keys().collect();
             let params = json!({ "payload": rules });
@@ -356,6 +363,7 @@ impl Engine {
             home: home.clone(),
             emitter: Box::new(emitter),
             tx: tx.clone(),
+            triggers: triggers::Triggers::new(tx.clone()),
             loaded: RwLock::new(loaded.clone()),
             load_errors: RwLock::new(load_errors.clone()),
             folder_loaded: AtomicBool::new(load_errors.is_empty()),
@@ -489,6 +497,12 @@ impl Engine {
 
     pub fn loaded(&self) -> Arc<Loaded> {
         self.shared.loaded()
+    }
+
+    /// Fires the rules with this `when.system` event. `offline` fires only once it has lasted `offline_debounce`,
+    /// and `online` only after an `offline` fired.
+    pub fn system_event(&self, event: SystemEvent) {
+        self.shared.triggers.system(event, self.shared.loaded().settings.offline_debounce);
     }
 
     /// Runs the minute tick now, as if the clock read `now_ms`.

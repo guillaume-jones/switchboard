@@ -13,3 +13,10 @@ serde_json.workspace = true
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-notification = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+core-foundation = "0.9"
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace"] }
+objc2-foundation = { version = "0.3", features = ["NSDistributedNotificationCenter", "NSNotification", "NSOperation", "NSString", "block2"] }
+system-configuration = "0.7"

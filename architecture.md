@@ -211,7 +211,7 @@ The shell renders one root card. All layout is cards rendering cards.
 
 On first run the app copies `template/` into the folder, runs `git init`, installs the pre-commit hook and commits. The template's sources and cards are ordinary files and can be replaced.
 
-- **`sessions`:** Claude Code hooks call `swb write sessions.claude_hook`. `sessions.launch {prompt, cwd}` opens a terminal session (run stays `open`; a rule finishes it when the session ends), `sessions.edit {prompt}` edits the folder headlessly and commits with the prompt as message. Both pass `files/claude-hooks.json` to `claude --settings`.
+- **`sessions`:** Claude Code hooks call `swb write sessions.claude_hook`, which sets each session's status: `working`, `needs_permission`, `needs_input`, `ready`, `errored` or `ended`. No hook fires on an interrupt, so the `sessions-interrupted` rule watches transcripts (`when.files` with `line_contains`) for Claude's interrupt marker and sets the session back to `ready`. `sessions.launch {prompt, cwd}` opens a terminal session (the run succeeds once the terminal opens; the session's status lives in `sessions.items`), `sessions.edit {prompt}` edits the folder headlessly and commits with the prompt as message. Both pass `files/claude-hooks.json` to `claude --settings`.
 - **`attention`:** items with one open per ref; `raise`, `clear`, `snooze`, `wake`. Rules wake due snoozes every minute, `core.notify` for items of level ≥ 2 when raised and each time they wake from a snooze (up to 60 per hour), and raise blocked firings.
 - **`ui`:** boards and grid tiles. With no boards, `Boards` shows an implicit Main `Grid`.
 - **`workstreams`:** streams and their member refs.

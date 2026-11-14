@@ -1,0 +1,6 @@
+{
+  "id": "sessions-interrupted",
+  "when": { "files": "~/.claude/projects/*/*.jsonl", "line_contains": "[Request interrupted by user" },
+  "into": "sessions.interrupted",
+  "args": { "line": "{line}" }
+}

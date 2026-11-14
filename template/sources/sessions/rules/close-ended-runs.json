@@ -1,7 +1,0 @@
-{
-  "id": "sessions-close-ended-runs",
-  "when": { "view": "sessions_ended_runs" },
-  "key": "{run_id}",
-  "into": "core.run_finish",
-  "args": { "id": "{run_id}", "state": "success", "summary": "session {session} ended" }
-}

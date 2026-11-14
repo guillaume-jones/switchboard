@@ -136,3 +136,42 @@ fn attention_is_raised_for_blocked_firings() {
     assert_eq!(raised[0]["level"], 2);
     assert_eq!(notified(&rx, Duration::from_millis(500)).len(), 1);
 }
+
+#[test]
+fn sessions_track_claude_hooks_and_interrupts() {
+    let (_dir, engine, _rx) = template_home();
+    let hook = |event: Value| {
+        let mut payload = json!({"session_id": "s1", "cwd": "/tmp"});
+        payload.as_object_mut().unwrap().extend(event.as_object().unwrap().clone());
+        engine.write("sessions.claude_hook", json!({"payload": payload.to_string()}), card()).unwrap();
+        engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0]["status"].as_str().unwrap().to_string()
+    };
+    for (event, status) in [
+        (json!({"hook_event_name": "SessionStart", "source": "startup"}), "ready"),
+        (json!({"hook_event_name": "UserPromptSubmit", "prompt": "fix the build"}), "working"),
+        (json!({"hook_event_name": "SessionStart", "source": "compact"}), "working"),
+        (json!({"hook_event_name": "PermissionRequest", "tool_name": "Bash"}), "needs_permission"),
+        (json!({"hook_event_name": "PostToolUse", "tool_name": "Bash"}), "working"),
+        (json!({"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion"}), "needs_input"),
+        (json!({"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion"}), "working"),
+        (json!({"hook_event_name": "Notification", "notification_type": "idle_prompt"}), "working"),
+        (json!({"hook_event_name": "Notification", "notification_type": "elicitation_dialog"}), "needs_input"),
+        (json!({"hook_event_name": "StopFailure"}), "errored"),
+        (json!({"hook_event_name": "Stop"}), "ready"),
+        (json!({"hook_event_name": "SessionEnd", "reason": "prompt_input_exit"}), "ended"),
+    ] {
+        assert_eq!(hook(event.clone()), status, "after {event}");
+    }
+    assert_eq!(engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0]["title"], "fix the build");
+
+    let line = |kind: &str, text: &str| {
+        json!({"type": kind, "sessionId": "s1", "message": {"role": kind, "content": [{"type": "text", "text": text}]}})
+            .to_string()
+    };
+    hook(json!({"hook_event_name": "UserPromptSubmit"}));
+    let interrupt = |line: String| engine.write("sessions.interrupted", json!({"line": line}), card()).unwrap();
+    assert_eq!(interrupt(line("assistant", "[Request interrupted by user]")), 0);
+    assert_eq!(interrupt(line("user", "[Request interrupted by user for tool use]")), 1);
+    assert_eq!(engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0]["status"], "ready");
+    assert_eq!(interrupt(line("user", "[Request interrupted by user]")), 0);
+}

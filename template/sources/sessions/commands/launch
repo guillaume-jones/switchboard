@@ -1,6 +1,6 @@
 #!/bin/zsh
 # sessions.launch {prompt, cwd}: opens an interactive Claude Code session in the terminal named in settings.json.
-# The run stays open; the sessions-close-ended-runs rule finishes it when the session ends.
+# The run succeeds once the terminal opens; the session's own state is tracked in sessions.items.
 cwd=${SWB_ARG_CWD:-$HOME}
 terminal=$(plutil -extract terminal raw -o - "$SWITCHBOARD_HOME/settings.json" 2>/dev/null) || terminal=Terminal
 script=$SWITCHBOARD_HOME/data/launch/$RUN_ID.command
@@ -13,4 +13,4 @@ exec claude --settings ${(q)SOURCE_DIR}/files/claude-hooks.json ${SWB_ARG_PROMPT
 SCRIPT
 chmod +x $script
 open -a $terminal $script || exit 1
-print -r -- "{\"outcome\": \"open\", \"summary\": \"launched in $terminal\"}"
+print -r -- "{\"outcome\": \"success\", \"summary\": \"launched in $terminal\"}"

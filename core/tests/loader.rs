@@ -401,7 +401,9 @@ fn trigger_validation() {
         ("rules/d.json", r#"{"id": "d", "when": {"view": "prs_items", "line_contains": "x"}, "key": "{id}", "run": "core.snapshot"}"#),
         ("rules/e.json", r#"{"id": "e", "when": {"files": "/tmp/*.log"}, "into": "prs.upsert", "args": {"id": 1, "title": "{line}"}}"#),
         ("rules/f.json", r#"{"id": "f", "when": {"files": "/tmp/*.log", "line_contains": "ERROR"}, "into": "prs.upsert", "args": {"id": 1, "title": "{path}: {line}"}}"#),
-        ("rules/g.json", r#"{"id": "g", "when": {"system": "unlock"}, "into": "prs.upsert", "args": {"id": 1, "title": "{event}"}}"#),
+        ("rules/g.json", r#"{"id": "g", "when": {"system": "unlock"}, "into": "prs.upsert", "args": {"id": 1, "title": "{event}"}, "log": false}"#),
+        ("rules/h.json", r#"{"id": "h", "when": {"view": "prs_items"}, "key": "{id}", "run": "core.snapshot", "log": false}"#),
+        ("rules/i.json", r#"{"id": "i", "when": {"system": "wake"}, "run": "core.snapshot", "log": "no"}"#),
     ]);
     let h = home(&files);
     let e = errors(h.path());
@@ -411,6 +413,8 @@ fn trigger_validation() {
         "rules/c.json: error: when.files \"logs/*.log\" must be an absolute path or start with ~/",
         "rules/d.json: error: when.line_contains needs when.files",
         "rules/e.json: error: {line} is not a variable of the trigger (variables: path)",
+        "rules/h.json: error: log: false needs a rule without when.view",
+        "rules/i.json: error: log must be true or false",
     ] {
         assert!(e.contains(expected), "missing {expected:?} in\n{e}");
     }

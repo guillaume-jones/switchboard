@@ -198,6 +198,8 @@ pub struct Rule {
     pub args: Map<String, Value>,
     pub max_per_hour: Option<u32>,
     pub timeout: Option<Duration>,
+    /// `log: false` skips its firing rows and write events; errors and blocked firings are still recorded.
+    pub log: bool,
 }
 
 /// `when.view`, and the `key` template rendered for each of its rows: a rule fires once per new key.
@@ -321,7 +323,7 @@ pub(super) struct RuleContext<'a> {
     pub commands: &'a BTreeMap<String, PathBuf>,
 }
 
-const RULE_FIELDS: [&str; 8] = ["id", "when", "key", "run", "into", "args", "max_per_hour", "timeout"];
+const RULE_FIELDS: [&str; 9] = ["id", "when", "key", "run", "into", "args", "max_per_hour", "timeout", "log"];
 const WHEN_FIELDS: [&str; 5] = ["view", "schedule", "files", "line_contains", "system"];
 const TRIGGER_FIELDS: [&str; 3] = ["schedule", "files", "system"];
 
@@ -458,6 +460,17 @@ pub(super) fn parse_rule(
         }
         seconds
     });
+    let log = match fields.get("log") {
+        None => true,
+        Some(Value::Bool(log)) => *log,
+        Some(_) => {
+            problems.push("log must be true or false".into());
+            true
+        }
+    };
+    if !log && view.is_some() {
+        problems.push("log: false needs a rule without when.view, whose firings remember the keys it fired".into());
+    }
     let scheduled = matches!(trigger, Some(Trigger::Schedule(_)));
     if let Some(v) = view.as_ref().filter(|_| !scheduled && watched.is_some_and(|s| s.time_dependent)) {
         diags.warn(path, format!("{v} depends on the current time but the rule has no when.schedule, so it only re-evaluates after writes"));
@@ -482,6 +495,7 @@ pub(super) fn parse_rule(
         args,
         max_per_hour,
         timeout: timeout.map(Duration::from_secs),
+        log,
     })
 }
 

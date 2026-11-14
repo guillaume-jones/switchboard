@@ -67,8 +67,9 @@ Conventions: primary key on every table; provider JSON kept in `raw` and exposed
 | `into` | a writer. With `run`: gets stdout as `:payload` if the command succeeds. Alone: called with `args`, which must match its params exactly |
 | `args` | `"{col}"` passes the typed value; other strings are interpolated |
 | `max_per_hour`, `timeout` | per-rule overrides |
+| `log` | `false` skips the rule's `core_firings` rows and write events, for frequent triggers. Only without `when.view`; errors, blocked firings and runs are still recorded |
 
-Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs in an hour for a rule with `when.view` or `when.files`, the firing is blocked, recorded in `core_firings` and its key consumed; the rate limit also disables the rule until `core.rule_enable {rule}`. At most `max_concurrency` rule runs execute at once; others queue. Runs started by hand are never limited.
+Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started in an hour by a rule with `when.view` or `when.files`, the firing is blocked, recorded in `core_firings` and its key consumed; the rate limit also disables the rule until `core.rule_enable {rule}`. At most `max_concurrency` rule runs execute at once; others queue. Runs started by hand are never limited.
 
 ## Commands
 

@@ -1,1 +1,1 @@
-{ "id": "attention-wake", "when": { "schedule": "* * * * *" }, "into": "attention.wake" }
+{ "id": "attention-wake", "when": { "schedule": "* * * * *" }, "into": "attention.wake", "log": false }

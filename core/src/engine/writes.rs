@@ -294,7 +294,12 @@ impl Batch<'_> {
                 for table in &writer.tables {
                     self.dirty.entry(table.clone()).or_default().extend(origin.run_id.clone());
                 }
-                let logged = !origin.is_engine() && writer.tables.iter().any(|t| t != "core.events");
+                let quiet = origin
+                    .trigger
+                    .strip_prefix("rule:")
+                    .and_then(|id| self.loaded.rules.get(id))
+                    .is_some_and(|r| !r.log);
+                let logged = !origin.is_engine() && !quiet && writer.tables.iter().any(|t| t != "core.events");
                 if logged {
                     let message = format!("{changes} changes");
                     self.events.push(Event {
@@ -358,7 +363,8 @@ impl Batch<'_> {
     /// Records the firing, unless the key already fired, then applies the limits and starts the rule's action.
     fn fire(&mut self, rule: &Rule, key: &str, row: &Value, caused_by: &[String]) -> Result<Fired> {
         let commit = &self.loaded.commit;
-        if self.core_write("firing", json!({ "rule": rule.id, "key": key, "git_commit": commit }))? == 0 {
+        let firing = json!({ "rule": rule.id, "key": key, "git_commit": commit });
+        if rule.log && self.core_write("firing", firing.clone())? == 0 {
             return Ok(Fired::Continue);
         }
         let (parent, parent_depth) = if caused_by.is_empty() {
@@ -375,6 +381,9 @@ impl Batch<'_> {
         let max_depth = i64::from(settings.max_depth);
         if depth > max_depth {
             let reason = format!("depth {depth} exceeds max_depth {max_depth}");
+            if !rule.log {
+                self.core_write("firing", firing.clone())?;
+            }
             self.core_write(
                 "firing_update",
                 json!({ "rule": rule.id, "key": key, "run_id": null, "blocked": reason }),
@@ -385,10 +394,13 @@ impl Batch<'_> {
             let max_per_hour = rule.max_per_hour.unwrap_or(settings.max_per_hour);
             let runs_last_hour: i64 = self
                 .conn
-                .prepare_cached("SELECT count(*) FROM core.firings WHERE rule = ?1 AND at > ?2 AND run_id IS NOT NULL")?
+                .prepare_cached("SELECT count(*) FROM core.runs WHERE created_at > ?2 AND rule = ?1")?
                 .query_row(params![rule.id, now_ms() - HOUR_MS], |r| r.get(0))?;
             if runs_last_hour >= i64::from(max_per_hour) {
                 let reason = format!("max_per_hour {max_per_hour} exceeded");
+                if !rule.log {
+                    self.core_write("firing", firing.clone())?;
+                }
                 self.core_write(
                     "firing_update",
                     json!({ "rule": rule.id, "key": key, "run_id": null, "blocked": reason }),
@@ -430,7 +442,12 @@ impl Batch<'_> {
         let run_id = new_run_id();
         let run = json!({ "id": run_id, "command": command, "args": args.to_string(), "parent": parent, "depth": depth, "rule": rule.id, "git_commit": commit });
         self.core_write("run_insert", run)?;
-        self.core_write("firing_update", json!({ "rule": rule.id, "key": key, "run_id": run_id, "blocked": null }))?;
+        if rule.log {
+            self.core_write(
+                "firing_update",
+                json!({ "rule": rule.id, "key": key, "run_id": run_id, "blocked": null }),
+            )?;
+        }
         if let Some(writer) = inline_writer {
             let written = self.write(writer, &args, &Origin { trigger, run_id: Some(run_id.clone()) });
             self.core_write("run_start", json!({ "id": run_id, "pid": null }))?;

@@ -809,3 +809,46 @@ fn system_rules_fire_and_offline_waits_for_its_debounce() {
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(keys(), ["wake", "offline", "online"]);
 }
+
+#[test]
+fn unlogged_schedule_rules_fire_once_per_slot_without_firings_or_write_events() {
+    let h = home(&[(
+        "rules/beat.json",
+        r#"{"id": "beat", "when": {"schedule": "*/5 * * * *"}, "into": "log.note", "args": {"key": "beat"}, "log": false}"#,
+    )]);
+    let (engine, _rx) = open(h.path());
+    until(&engine, "core_rules", json!({"rule": "beat"}), 5, |r| {
+        r.first().is_some_and(|r| r["last_evaluated"].is_string())
+    });
+    let base = now_ms() - now_ms() % 300_000 + 3_600_000;
+    for offset in [60_000, 120_000, 240_000, 3 * 3_600_000] {
+        engine.tick(base + offset);
+    }
+    until(&engine, "log_notes", json!({}), 5, |r| r.len() == 2);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(engine.query("log_notes", json!({})).unwrap().as_array().unwrap().len(), 2);
+    assert_eq!(engine.query("core_firings", json!({"rule": "beat"})).unwrap(), json!([]));
+    assert_eq!(engine.query("core_events", json!({"kind": "write", "name": "log.note"})).unwrap(), json!([]));
+}
+
+#[test]
+fn unlogged_file_rules_with_runs_are_rate_limited_by_their_runs() {
+    let watched = tempfile::tempdir().unwrap();
+    let log = watched.path().join("app.log");
+    fs::write(&log, "").unwrap();
+    let pattern = watched.path().join("*.log").display().to_string();
+    let rule = format!(
+        r#"{{"id": "errors", "when": {{"files": "{pattern}", "line_contains": "ERROR"}}, "run": "core.notify", "args": {{"title": "{{line}}", "body": ""}}, "max_per_hour": 2, "log": false}}"#
+    );
+    let h = home(&[("rules/errors.json", &rule)]);
+    let (engine, _rx) = open(h.path());
+    until(&engine, "core_rules", json!({"rule": "errors"}), 5, |r| r.len() == 1);
+    std::thread::sleep(Duration::from_millis(300));
+    std::io::Write::write_all(&mut fs::OpenOptions::new().append(true).open(&log).unwrap(), b"ERROR 1\nERROR 2\nERROR 3\n")
+        .unwrap();
+    let rules = until(&engine, "core_rules", json!({"rule": "errors"}), 5, |r| r[0]["enabled"] == 0);
+    assert_eq!(rules[0]["disabled_reason"], "max_per_hour 2 exceeded");
+    assert_eq!(engine.query("core_runs", json!({"rule": "errors"})).unwrap().as_array().unwrap().len(), 2);
+    let firings = engine.query("core_firings", json!({"rule": "errors"})).unwrap();
+    assert_eq!(firings.as_array().unwrap().len(), 1, "only the blocked firing is recorded: {firings}");
+}

@@ -116,7 +116,7 @@ Source names are `[a-z][a-z0-9]*` (no `_`, since views are `<source>_<file>`). A
 Limits, all computed from `core` tables:
 
 - **Depth:** a firing caused by writes from runs takes the deepest of those runs as parent. Past `max_depth` (5) it is blocked. `RUN_ID` reaches everything a command starts, and `swb write` forwards it.
-- **Rate:** a rule with `when.view` or `when.files` that has started `max_per_hour` runs in the last hour is blocked and disabled until `core.rule_enable`. Schedule and system rules are bounded by their cron and the machine.
+- **Rate:** a rule with `when.view` or `when.files` that has started `max_per_hour` runs in the last hour (counted in `core.runs`) is blocked and disabled until `core.rule_enable`. Schedule and system rules are bounded by their cron and the machine.
 - **Concurrency:** at most `max_concurrency` rule runs are `running` (`core.notify` exempt); the rest stay `queued`.
 - A blocked firing records its reason and consumes its key; retrying is manual. Runs started by hand are never limited.
 
@@ -161,7 +161,7 @@ Embedded in the binary, written only by the engine, and the only source whose sc
   open → unknown                (open_run_expiry)
   ```
   Exit code sets the state; a last stdout line `{outcome, summary}` refines it (except for `into` runs).
-- **`firings`:** rule, key (unique together), run, time, blocked reason, commit. Kept long-term except trigger occurrence keys (`slot:`, `file:`, `system:`), trimmed after 7 days.
+- **`firings`:** rule, key (unique together), run, time, blocked reason, commit. Kept long-term except trigger occurrence keys (`slot:`, `file:`, `system:`), trimmed after 7 days. A rule without a view can set `log: false` to record neither firings (other than blocked ones) nor write events; a view rule cannot, since its firings are what remember the keys it fired.
 - **`rules`:** enabled, disabled reason, last evaluated.
 - **`events`:** writes that changed rows (with trigger and run), errors of every kind (`loader`, `sql`, `card_runtime`, `spool`, `runner`, …), and reads slower than 100 ms. The engine's own bookkeeping writes produce no events.
 - **Views:** `core_runs`, `core_firings`, `core_rules`, `core_items` (rules as `core:<rule>` refs) and `core_events` expose every row and never filter; consumers filter on top. Indexes cover the common filters (`kind`, `run_id`, `name`, `state`, `rule`). Mounting a view over a growing table re-sends the whole result after every write unless its filter keeps the result small; for recent history, cards use a query with a limit.

@@ -213,3 +213,31 @@ fn sessions_keep_the_last_message_and_pending_decisions() {
     let session = hook(json!({"hook_event_name": "PostToolUse", "tool_name": "Bash"}), None);
     assert_eq!((session["status"].as_str(), session["decision"].is_null(), session["answer"].is_null()), (Some("working"), true, true));
 }
+
+#[test]
+fn transcripts_keep_messages_of_open_sessions_only() {
+    let (_dir, engine, _rx) = template_home();
+    let add = |lines: Value| engine.write("sessions.transcript_add", json!({"payload": lines.to_string()}), card()).unwrap();
+    let line = |uuid: &str, session: &str, kind: &str, content: Value| {
+        json!({"uuid": uuid, "sessionId": session, "type": kind, "timestamp": format!("2026-01-01T00:00:0{uuid}Z"), "message": {"role": kind, "content": content}})
+    };
+    let first = line("1", "s1", "user", json!("hello"));
+    assert_eq!(add(json!([first])), 0, "closed sessions keep nothing");
+    engine.write("sessions.transcript_open", json!({"session": "s1"}), card()).unwrap();
+    let mut sidechain = line("4", "s1", "assistant", json!([{"type": "text", "text": "subagent"}]));
+    sidechain["isSidechain"] = json!(true);
+    let lines = json!([
+        first,
+        line("2", "s1", "assistant", json!([{"type": "thinking", "thinking": "hm"}, {"type": "text", "text": "Hi"}, {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}])),
+        line("3", "s2", "user", json!("other session")),
+        sidechain,
+        {"type": "queue-operation", "sessionId": "s1"},
+    ]);
+    assert_eq!(add(lines.clone()), 2);
+    assert_eq!(add(lines), 0, "lines already kept are ignored");
+    let messages = engine.query("sessions.transcript", json!({"session": "s1", "limit": 10})).unwrap();
+    let texts: Vec<&str> = messages.as_array().unwrap().iter().map(|m| m["text"].as_str().unwrap()).collect();
+    assert_eq!(texts, ["hello", "Hi\n\n→ Bash {\"command\":\"ls\"}"]);
+    engine.write("sessions.transcript_close", json!({"session": "s1"}), card()).unwrap();
+    assert_eq!(engine.query("sessions.transcript", json!({"session": "s1", "limit": 10})).unwrap(), json!([]));
+}

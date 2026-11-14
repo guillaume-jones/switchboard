@@ -106,6 +106,7 @@ const VIEWS: Record<string, () => Row[]> = {
 const QUERIES: Record<string, (params: Args) => Row[]> = {
   'prs.search': ({ text }) =>
     VIEWS.prs_items().filter(pr => pr.title.toLowerCase().includes(String(text).toLowerCase())),
+  'sessions.transcript': () => [],
   'sessions.recent': ({ limit }) => [...db.sessions].reverse().slice(0, Number(limit)),
   'ui.boards': () => db.boards.map(board => ({ ...board, current: board.id === db.currentBoard ? 1 : 0 })),
   'core.events': ({ kind, limit }) =>
@@ -123,6 +124,7 @@ const stepBoard = (step: 1 | -1) => {
 const findTile = (grid: string, id: string) => db.tiles.find(tile => tile.grid === grid && tile.id === id)
 
 const WRITERS: Record<string, (params: Args) => void> = {
+  'sessions.transcript_close': () => {},
   'prs.dismiss': ({ ref }) => {
     for (const pr of db.prs) if (`prs:${pr.id}` === ref) pr.dismissed = true
   },
@@ -156,6 +158,7 @@ const COMMANDS = [
   'sessions.headless',
   'sessions.poke',
   'sessions.open',
+  'sessions.transcript',
   'core.snapshot',
   'core.restore',
 ]

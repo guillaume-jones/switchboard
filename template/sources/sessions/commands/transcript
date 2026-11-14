@@ -1,0 +1,13 @@
+#!/bin/zsh
+# sessions.transcript {session}: loads a session's transcript into sessions.messages (query sessions.transcript); the
+# sessions-transcripts rule then adds lines as they are appended, until sessions.transcript_close.
+path_=$(print -l ~/.claude/projects/*/$SWB_ARG_SESSION.jsonl(N) | head -1)
+[[ -n $path_ ]] || { print -r -- '{"outcome": "failure", "summary": "no transcript for this session"}'; exit 1 }
+"$SWB" write sessions.transcript_open session=$SWB_ARG_SESSION || exit 1
+jq -cs 'map(select(.type == "user" or .type == "assistant")
+  | .message.content |= (if type == "array" then map(
+      if .type == "tool_result" then .content |= (tostring | .[0:300])
+      elif .type == "tool_use" then .input |= (tostring | .[0:300])
+      elif .type == "thinking" then empty
+      else . end) else . end))' $path_ | "$SWB" write sessions.transcript_add || exit 1
+print -r -- '{"outcome": "success", "summary": "loaded"}'

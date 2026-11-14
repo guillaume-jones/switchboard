@@ -1,0 +1,7 @@
+{
+  "id": "sessions-transcripts",
+  "when": { "files": "~/.claude/projects/*/*.jsonl", "line_contains": "\"sessionId\"" },
+  "into": "sessions.transcript_add",
+  "args": { "payload": "[{line}]" },
+  "log": false
+}

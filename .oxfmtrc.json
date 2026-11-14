@@ -4,5 +4,9 @@
   "semi": false,
   "singleQuote": true,
   "arrowParens": "avoid",
-  "ignorePatterns": ["app/src-tauri/gen", "app/package-lock.json"]
+  "ignorePatterns": [
+    "app/src-tauri/gen",
+    "app/package-lock.json",
+    "template/cards/lib/marked.*"
+  ]
 }

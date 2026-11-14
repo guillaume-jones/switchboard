@@ -100,7 +100,7 @@ Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started i
 
 ## Cards
 
-`cards/<Name>.tsx` default-exports a React component. Imports allowed: `react`, `react/jsx-runtime`, `switchboard`, and relative paths into `cards/lib/` (tried as written, then `.ts`, `.tsx`, `.js`; no `index`). Cards never import each other; no npm packages, dynamic `import()` or `import.meta`. Each card gets its own instance of its helpers.
+`cards/<Name>.tsx` default-exports a React component. Imports allowed: `react`, `react/jsx-runtime`, `switchboard`, and relative paths into `cards/lib/` (tried as written, then `.ts`, `.tsx`, `.js`; no `index`). Cards never import each other; no npm packages, dynamic `import()` or `import.meta`. A dependency-free single-file ESM build of a library can be vendored into `cards/lib/` with its `.d.ts`, like `lib/marked.js`. Each card gets its own instance of its helpers. Render agent or remote text with `renderMarkdown` from `lib/markdown`, never as raw HTML: card HTML runs in the webview, which can start commands.
 
 ```ts
 import { useQuery, mutate, run, useExpose, CardSlot, Item, type CardProps } from "switchboard"

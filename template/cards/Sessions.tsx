@@ -1,19 +1,8 @@
 import { useEffect, useState, type CSSProperties } from 'react'
-import { mutate, run, useQuery, type CardProps } from 'switchboard'
+import { CardSlot, mutate, run, useQuery, type CardProps } from 'switchboard'
+import { renderMarkdown } from './lib/markdown'
+import { busy, Composer, followUp, type Session } from './lib/sessions'
 
-type Session = {
-  id: string
-  title: string
-  status: string
-  cwd: string | null
-  host: string | null
-  owned: number
-  last_message: string | null
-  decision: string | null
-  run_state: string | null
-  run_command: string | null
-  updated: string
-}
 type Decision = { tool_name: string; tool_input: Record<string, any>; at: number }
 type Question = {
   question: string
@@ -24,7 +13,7 @@ type Question = {
 
 const ROW: CSSProperties = { padding: '6px 8px', borderBottom: '1px solid var(--border)' }
 const MUTED: CSSProperties = { color: 'var(--muted)' }
-const MESSAGE: CSSProperties = { whiteSpace: 'pre-wrap', margin: '4px 0', maxHeight: 160, overflow: 'auto' }
+const MESSAGE: CSSProperties = { margin: '4px 0', maxHeight: 160, overflow: 'auto' }
 const WAITING = ['needs_permission', 'needs_input']
 
 const HOSTS: Record<string, string> = {
@@ -34,8 +23,6 @@ const HOSTS: Record<string, string> = {
   'com.apple.Terminal': 'Terminal',
   'com.googlecode.iterm2': 'iTerm',
 }
-
-const busy = (session: Session) => session.run_state === 'running' || session.run_state === 'queued'
 
 /** Claude sessions: status, last message, decisions to answer, follow-ups (owned sessions) or pokes (others). */
 export default function Sessions({ limit = 30 }: CardProps<{ limit?: number }>) {
@@ -69,12 +56,6 @@ export default function Sessions({ limit = 30 }: CardProps<{ limit?: number }>) 
   )
 }
 
-function followUp(session: Session, prompt: string) {
-  return session.run_command === 'sessions.edit'
-    ? run('sessions.edit', { prompt, session: session.id })
-    : run('sessions.headless', { prompt, session: session.id, cwd: session.cwd ?? '' })
-}
-
 function SessionRow({
   session,
   queued,
@@ -86,14 +67,10 @@ function SessionRow({
   onQueue: (prompt: string) => void
   onError: (message: string) => void
 }) {
-  const [text, setText] = useState('')
   const [expanded, setExpanded] = useState(false)
+  const [transcript, setTranscript] = useState(false)
   const decision: Decision | null = session.decision ? JSON.parse(session.decision) : null
   const fail = (e: Error) => onError(e.message)
-  const send = (action: () => Promise<unknown>) => {
-    if (!text.trim()) return
-    action().then(() => setText(''), fail)
-  }
 
   return (
     <div style={ROW}>
@@ -106,46 +83,24 @@ function SessionRow({
         </span>
         <span style={MUTED}>{HOSTS[session.host ?? ''] ?? session.host ?? '?'}</span>
         <span style={MUTED}>{session.updated}</span>
+        <button onClick={() => setTranscript(!transcript)}>{transcript ? 'Hide' : 'Transcript'}</button>
         <button onClick={() => run('sessions.open', { session: session.id }).catch(fail)}>Open</button>
       </div>
       {session.last_message && (
         <div
           style={{ ...MESSAGE, maxHeight: expanded ? undefined : MESSAGE.maxHeight }}
           onClick={() => setExpanded(!expanded)}
-        >
-          {session.last_message}
-        </div>
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(session.last_message) }}
+        />
       )}
       {decision && WAITING.includes(session.status) && (
         <DecisionPanel session={session} decision={decision} onError={onError} />
       )}
-      {session.status !== 'ended' || session.owned ? (
-        <form style={{ display: 'flex', gap: 6, marginTop: 4 }} onSubmit={e => e.preventDefault()}>
-          <input
-            value={text}
-            onChange={e => setText(e.target.value)}
-            placeholder={queued ? `Queued: ${queued}` : session.owned ? 'Follow up' : 'Poke this session'}
-            style={{ flex: 1 }}
-          />
-          {session.owned ? (
-            <>
-              <button
-                type="button"
-                onClick={() => send(async () => (busy(session) ? onQueue(text) : followUp(session, text)))}
-              >
-                Queue
-              </button>
-              <button type="button" onClick={() => send(() => followUp(session, text))}>
-                Interrupt
-              </button>
-            </>
-          ) : (
-            <button type="button" onClick={() => send(() => run('sessions.poke', { session: session.id, text }))}>
-              Poke
-            </button>
-          )}
-        </form>
-      ) : null}
+      {transcript ? (
+        <CardSlot component="Transcript" props={{ session: session.id }} id={`transcript-${session.id}`} />
+      ) : (
+        <Composer session={session} queued={queued} onQueue={onQueue} onError={onError} />
+      )}
     </div>
   )
 }
@@ -183,7 +138,7 @@ function DecisionPanel({
       <div style={{ fontWeight: 600 }}>
         {decision.tool_name === 'ExitPlanMode' ? 'Approve plan?' : `Allow ${decision.tool_name}?`}
       </div>
-      <pre style={{ ...MESSAGE, fontFamily: 'ui-monospace, monospace' }}>{input}</pre>
+      <pre style={{ ...MESSAGE, whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, monospace' }}>{input}</pre>
       <div style={{ display: 'flex', gap: 6 }}>
         <button onClick={() => answer({ behavior: 'allow' })}>Allow</button>
         <button onClick={deny}>Deny</button>

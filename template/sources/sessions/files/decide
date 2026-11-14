@@ -1,0 +1,22 @@
+#!/bin/zsh
+# PermissionRequest hook: records the request, then waits for an answer from Switchboard (sessions.decide).
+# Exits without a decision, leaving it to the session's own prompt, once the request is answered elsewhere or
+# superseded, Claude Code's process is gone, or Switchboard cannot be reached.
+path+=(~/.local/bin /usr/local/bin)
+swb=${SWB:-swb}
+payload=$(cat)
+print -r -- $payload | /bin/zsh "${0:h}/hook" || exit 0
+session=$(print -r -- $payload | jq -r .session_id)
+mine=$("$swb" query sessions_items id=$session | jq -r '.[0].decision | fromjson? | .at // empty') || exit 0
+[[ -n $mine ]] || exit 0
+while sleep 0.5; do
+  [[ -z $CLAUDE_PID ]] || kill -0 $CLAUDE_PID 2>/dev/null || exit 0
+  row=$("$swb" query sessions_items id=$session | jq -c '.[0]') || exit 0
+  [[ $(print -r -- $row | jq -r '.decision | fromjson? | .at // empty') == $mine ]] || exit 0
+  answer=$(print -r -- $row | jq -c '.answer | fromjson? // empty')
+  [[ -n $answer ]] || continue
+  input=$(print -r -- $row | jq -c '.decision | fromjson | .tool_input')
+  print -r -- $answer | jq -c --argjson input $input '{hookSpecificOutput: {hookEventName: "PermissionRequest",
+    decision: (if .behavior == "allow" then {updatedInput: $input} + . else . end)}}'
+  exit 0
+done

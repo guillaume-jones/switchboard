@@ -17,7 +17,7 @@ On first start the app creates `~/.switchboard` from [`template/`](template), ma
 
 ### Optional: track all agent sessions
 
-Agent sessions launched from the app already report to it. To track every Claude Code session, add the hooks from `~/.switchboard/sources/sessions/files/claude-hooks.json` to `~/.claude/settings.json` (or adapt to your agent).
+Agent sessions launched from the app already report to it. To track every Claude Code session (terminal, Zed and other SDK hosts) and answer their permission prompts from the board, merge the `hooks` from `~/.switchboard/sources/sessions/files/claude-hooks.json` into `~/.claude/settings.json` as they are (or adapt them to your agent).
 
 ## Develop
 

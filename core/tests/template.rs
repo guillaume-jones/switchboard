@@ -143,7 +143,8 @@ fn sessions_track_claude_hooks_and_interrupts() {
     let hook = |event: Value| {
         let mut payload = json!({"session_id": "s1", "cwd": "/tmp"});
         payload.as_object_mut().unwrap().extend(event.as_object().unwrap().clone());
-        engine.write("sessions.claude_hook", json!({"payload": payload.to_string()}), card()).unwrap();
+        let params = json!({"payload": payload.to_string(), "host": "dev.zed.Zed", "entrypoint": "sdk-ts"});
+        engine.write("sessions.claude_hook", params, card()).unwrap();
         engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0]["status"].as_str().unwrap().to_string()
     };
     for (event, status) in [
@@ -162,7 +163,9 @@ fn sessions_track_claude_hooks_and_interrupts() {
     ] {
         assert_eq!(hook(event.clone()), status, "after {event}");
     }
-    assert_eq!(engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0]["title"], "fix the build");
+    let session = &engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0];
+    assert_eq!((session["title"].as_str(), session["host"].as_str()), (Some("fix the build"), Some("dev.zed.Zed")));
+    assert_eq!(session["owned"], 0);
 
     let line = |kind: &str, text: &str| {
         json!({"type": kind, "sessionId": "s1", "message": {"role": kind, "content": [{"type": "text", "text": text}]}})
@@ -174,4 +177,39 @@ fn sessions_track_claude_hooks_and_interrupts() {
     assert_eq!(interrupt(line("user", "[Request interrupted by user for tool use]")), 1);
     assert_eq!(engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0]["status"], "ready");
     assert_eq!(interrupt(line("user", "[Request interrupted by user]")), 0);
+}
+
+#[test]
+fn sessions_keep_the_last_message_and_pending_decisions() {
+    let (_dir, engine, _rx) = template_home();
+    let hook = |event: Value, run_id: Option<&str>| {
+        let mut payload = json!({"session_id": "s1", "cwd": "/tmp"});
+        payload.as_object_mut().unwrap().extend(event.as_object().unwrap().clone());
+        let params = json!({"payload": payload.to_string(), "host": "switchboard", "entrypoint": "sdk-cli"});
+        let origin = Origin { trigger: "swb".into(), run_id: run_id.map(String::from) };
+        engine.write("sessions.claude_hook", params, origin).unwrap();
+        engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0].clone()
+    };
+    hook(json!({"hook_event_name": "UserPromptSubmit", "prompt": "investigate"}), Some("run1"));
+    let session = hook(json!({"hook_event_name": "Stop", "last_assistant_message": "Found it."}), None);
+    assert_eq!((session["last_message"].as_str(), session["run_id"].as_str()), (Some("Found it."), Some("run1")));
+    assert_eq!(session["owned"], 1);
+    let session = hook(json!({"hook_event_name": "UserPromptSubmit", "prompt": "again"}), Some("run2"));
+    assert_eq!((session["last_message"].as_str(), session["run_id"].as_str()), (Some("Found it."), Some("run2")));
+
+    let request = json!({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "ls"}});
+    let session = hook(request, None);
+    assert_eq!(session["status"], "needs_permission");
+    let decision: Value = serde_json::from_str(session["decision"].as_str().unwrap()).unwrap();
+    assert_eq!(decision["tool_input"], json!({"command": "ls"}));
+    let decide = |at: &Value| {
+        let params = json!({"id": "s1", "at": at, "answer": r#"{"behavior": "allow"}"#});
+        engine.write("sessions.decide", params, card()).unwrap()
+    };
+    assert_eq!(decide(&json!(1)), 0, "an answer to another request is ignored");
+    assert_eq!(decide(&decision["at"]), 1);
+    let session = engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0].clone();
+    assert_eq!(session["answer"], r#"{"behavior":"allow"}"#);
+    let session = hook(json!({"hook_event_name": "PostToolUse", "tool_name": "Bash"}), None);
+    assert_eq!((session["status"].as_str(), session["decision"].is_null(), session["answer"].is_null()), (Some("working"), true, true));
 }

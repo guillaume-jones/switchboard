@@ -33,7 +33,7 @@ export default function Root() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       <style>{THEME}</style>
       <header style={HEADER}>
-        <CardSlot component="EditBox" id="edit-box" size="compact" />
+        <CardSlot component="SessionBox" id="session-box" size="compact" />
         <CardSlot component="Health" id="health" size="compact" />
       </header>
       <main style={{ flex: 1, overflow: 'auto' }}>

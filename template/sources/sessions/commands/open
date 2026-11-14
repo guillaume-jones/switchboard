@@ -1,0 +1,9 @@
+#!/bin/zsh
+# sessions.open {session}: shows a session in the app that runs it: Zed's agent panel for Zed sessions (it cannot
+# open a given thread), otherwise the session resumed in a new terminal window (sessions.launch).
+row=$("$SWB" query sessions_items id=$SWB_ARG_SESSION | jq -c '.[0] // empty')
+[[ -n $row ]] || { print -r -- '{"outcome": "failure", "summary": "no such session"}'; exit 1 }
+case $(print -r -- $row | jq -r '.host // empty') in
+  dev.zed.Zed*) open "zed://agent" && print -r -- '{"outcome": "success", "summary": "opened the Zed agent panel"}' ;;
+  *) SWB_ARG_CWD=$(print -r -- $row | jq -r '.cwd // empty') SWB_ARG_PROMPT= exec "$SOURCE_DIR/commands/launch" ;;
+esac

@@ -1,0 +1,4 @@
+#!/bin/zsh
+# Records a Claude Code hook event (JSON on stdin) in sessions.items, with the host app and entrypoint it ran under.
+path+=(~/.local/bin /usr/local/bin)
+exec "${SWB:-swb}" write sessions.claude_hook host="${SWB_SESSION_HOST:-$__CFBundleIdentifier}" entrypoint="$CLAUDE_CODE_ENTRYPOINT"

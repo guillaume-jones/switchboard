@@ -106,6 +106,7 @@ const VIEWS: Record<string, () => Row[]> = {
 const QUERIES: Record<string, (params: Args) => Row[]> = {
   'prs.search': ({ text }) =>
     VIEWS.prs_items().filter(pr => pr.title.toLowerCase().includes(String(text).toLowerCase())),
+  'sessions.recent': ({ limit }) => [...db.sessions].reverse().slice(0, Number(limit)),
   'ui.boards': () => db.boards.map(board => ({ ...board, current: board.id === db.currentBoard ? 1 : 0 })),
   'core.events': ({ kind, limit }) =>
     db.events
@@ -149,7 +150,15 @@ const WRITERS: Record<string, (params: Args) => void> = {
   },
 }
 
-const COMMANDS = ['prs.fix-ci', 'sessions.edit', 'core.snapshot', 'core.restore']
+const COMMANDS = [
+  'prs.fix-ci',
+  'sessions.edit',
+  'sessions.headless',
+  'sessions.poke',
+  'sessions.open',
+  'core.snapshot',
+  'core.restore',
+]
 
 function startRun(command: string, args: Args) {
   if (!COMMANDS.includes(command)) throw new Error(`no command named ${command}`)
@@ -160,13 +169,13 @@ function startRun(command: string, args: Args) {
       change()
       pushChangedRows()
     }, ms)
-  if (command === 'sessions.edit') {
+  if (command === 'sessions.edit' || command === 'sessions.headless') {
     const session: Session = {
       id: `s${nextSeq++}`,
       title: String(args.prompt),
       status: 'working',
       run_id: run.id,
-      cwd: '~/.switchboard',
+      cwd: String(args.cwd ?? '~/.switchboard'),
     }
     db.sessions.push(session)
     later(1500, () => {

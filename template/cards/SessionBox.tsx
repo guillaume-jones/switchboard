@@ -12,10 +12,11 @@ const STATUS: CSSProperties = {
   maxWidth: 360,
 }
 
-/** Asks Claude Code to change this folder (`sessions.edit`) and shows the latest run's progress. */
-export default function EditBox({ slot }: CardProps) {
-  const storageKey = `EditBox.run.${slot}`
+/** Starts a Switchboard-owned Claude session: `sessions.edit` on this folder, or `sessions.headless` in another one. */
+export default function SessionBox({ slot }: CardProps) {
+  const storageKey = `SessionBox.run.${slot}`
   const [prompt, setPrompt] = useState('')
+  const [cwd, setCwd] = useState('')
   const [runId, setRunId] = useState(() => localStorage.getItem(storageKey))
   const [error, setError] = useState('')
 
@@ -25,7 +26,10 @@ export default function EditBox({ slot }: CardProps) {
       onSubmit={e => {
         e.preventDefault()
         if (!prompt.trim()) return
-        run('sessions.edit', { prompt }).then(
+        const started = cwd.trim()
+          ? run('sessions.headless', { prompt, cwd: cwd.trim() })
+          : run('sessions.edit', { prompt })
+        started.then(
           id => {
             localStorage.setItem(storageKey, id)
             setRunId(id)
@@ -39,8 +43,14 @@ export default function EditBox({ slot }: CardProps) {
       <input
         value={prompt}
         onChange={e => setPrompt(e.target.value)}
-        placeholder="Ask Claude to change this app"
+        placeholder={cwd.trim() ? `Ask Claude in ${cwd.trim()}` : 'Ask Claude to change this app'}
         style={{ flex: 1 }}
+      />
+      <input
+        value={cwd}
+        onChange={e => setCwd(e.target.value)}
+        placeholder="in this app, or a folder"
+        style={{ width: 180 }}
       />
       {error ? <span style={{ color: 'var(--bad)' }}>{error}</span> : runId && <Status runId={runId} />}
     </form>

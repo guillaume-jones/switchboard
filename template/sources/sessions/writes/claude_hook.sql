@@ -1,4 +1,4 @@
-INSERT INTO sessions.items (id, agent, title, status, cwd, run_id, raw, created_at, updated_at)
+INSERT INTO sessions.items (id, agent, title, status, cwd, run_id, raw, created_at, updated_at, host, entrypoint, last_message, decision)
 VALUES (
   :payload ->> '$.session_id',
   'claude',
@@ -8,22 +8,38 @@ VALUES (
   :run_id,
   :payload,
   CAST(unixepoch('subsec') * 1000 AS INTEGER),
-  CAST(unixepoch('subsec') * 1000 AS INTEGER)
+  CAST(unixepoch('subsec') * 1000 AS INTEGER),
+  nullif(:host, ''),
+  nullif(:entrypoint, ''),
+  iif(:payload ->> '$.hook_event_name' = 'Stop', :payload ->> '$.last_assistant_message', NULL),
+  iif(:payload ->> '$.hook_event_name' = 'PermissionRequest', json_object(
+    'tool_name', :payload ->> '$.tool_name',
+    'tool_input', json(:payload -> '$.tool_input'),
+    'at', CAST(unixepoch('subsec') * 1000 AS INTEGER)
+  ), NULL)
 )
 ON CONFLICT (id) DO UPDATE SET
   title = coalesce(title, excluded.title),
   cwd = excluded.cwd,
-  run_id = coalesce(run_id, excluded.run_id),
+  run_id = coalesce(excluded.run_id, run_id),
   raw = excluded.raw,
-  updated_at = excluded.updated_at;
+  updated_at = excluded.updated_at,
+  host = coalesce(host, excluded.host),
+  entrypoint = coalesce(entrypoint, excluded.entrypoint),
+  last_message = coalesce(excluded.last_message, last_message),
+  decision = coalesce(excluded.decision, decision),
+  answer = iif(excluded.decision IS NULL, answer, NULL);
 
-UPDATE sessions.items SET status = new.status
+UPDATE sessions.items SET
+  status = new.status,
+  decision = iif(new.status IN ('needs_permission', 'needs_input'), decision, NULL),
+  answer = iif(new.status IN ('needs_permission', 'needs_input'), answer, NULL)
 FROM (
   SELECT CASE :payload ->> '$.hook_event_name'
     WHEN 'SessionStart' THEN iif(:payload ->> '$.source' = 'compact', NULL, 'ready')
     WHEN 'UserPromptSubmit' THEN 'working'
     WHEN 'PreToolUse' THEN iif(:payload ->> '$.tool_name' IN ('AskUserQuestion', 'ExitPlanMode'), 'needs_input', 'working')
-    WHEN 'PermissionRequest' THEN 'needs_permission'
+    WHEN 'PermissionRequest' THEN iif(:payload ->> '$.tool_name' IN ('AskUserQuestion', 'ExitPlanMode'), 'needs_input', 'needs_permission')
     WHEN 'PostToolUse' THEN 'working'
     WHEN 'PostToolUseFailure' THEN 'working'
     WHEN 'Notification' THEN CASE :payload ->> '$.notification_type'

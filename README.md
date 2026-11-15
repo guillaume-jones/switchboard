@@ -1,52 +1,60 @@
 # Switchboard
 
-A personal macOS app that allows agents to build personalized UI, backed by custom data sources.
+An app to ingest any local data, serve personalized UI, and trigger any shell command.
 
-Everything it shows and does lives as files in `~/.switchboard`, written mostly by agents and reloaded by the app in real time.
+Everything it shows and does lives in `~/.switchboard`, which can be re-written by agents at any time and hot reloads.
 
 ## Install
 
-Requirements: macOS and git. The template's `sessions` source and edit box use [Claude Code](https://claude.com/claude-code), but can be replaced by any agent harness.
+### Download
 
-Download [Switchboard.dmg](https://github.com/guillaume-jones/switchboard/releases/latest/download/Switchboard.dmg), drag the app to Applications and open it. macOS will refuse at first, since the app isn't notarised: go to System Settings → Privacy & Security and click Open Anyway.
+Requires git.
 
-To build from source instead (requires Rust and Node 24):
+- **MacOS**: [Switchboard.dmg](https://github.com/guillaume-jones/switchboard/releases/latest/download/Switchboard.dmg)
+  - macOS will refuse to open the app at first. Go to System Settings → Privacy & Security and click Open Anyway.
+  - The app will ask for an admin password to link the `swb` CLI.
+- **Linux**: [Switchboard.deb](https://github.com/guillaume-jones/switchboard/releases/latest/download/Switchboard.deb) or [Switchboard.rpm](https://github.com/guillaume-jones/switchboard/releases/latest/download/Switchboard.rpm)
+  - `sudo apt install ./Switchboard.deb`  or  `sudo dnf install ./Switchboard.rpm`
+
+Other notes:
+- On first start the app creates `~/.switchboard` from [`template/`](template) as a git repo. This is the repo your agents can freely edit to add data or UI.
+- The default template assumes Claude Code, but can be replaced by any agent harness. 
+- To track every agent session, not just those launched from Switchboard, merge the `hooks` from `~/.switchboard/sources/sessions/files/claude-hooks.json` into your agent config.
+
+
+### Use from your phone
+
+The app can serve a mobile web app over Tailscale, with notifications & offline caching when the desktop disconnects.
+
+1. Install Tailscale on your desktop and phone, logged into the same account. In the admin console, enable MagicDNS and HTTPS certificates.
+2. Start the app.
+3. On the phone, open `https://<desktop>.<tailnet>.ts.net:8443` and add it to the home screen. 
+4. (Mac only) To keep the app online, enable "Prevent automatic sleeping on power adapter when the display is off" in Battery settings.
+5. (Linux only) Let the app run `tailscale serve` without root: `sudo tailscale set --operator=$USER`.
+
+
+### Build from source
+
+Requires Rust & Node 24.
+
+Linux also requires [Tauri's system dependencies](https://v2.tauri.app/start/prerequisites/#linux), plus `zsh`, `dash` and `jq` for the template.
 
 ```sh
 make install
-open /Applications/Switchboard.app
+open /Applications/Switchboard.app # MacOS
+switchboard & # Linux
 ```
-
-On first start the app asks for an admin password to link its `swb` CLI into `/usr/local/bin`.
-
-On first start the app creates `~/.switchboard` from [`template/`](template), makes it a git repo with a pre-commit hook that runs `swb check`, and commits it. An existing folder is never overwritten.
-
-### Optional: track all agent sessions
-
-Agent sessions launched from the app already report to it. To track every Claude Code session (terminal, Zed and other SDK hosts) and answer their permission prompts from the board, merge the `hooks` from `~/.switchboard/sources/sessions/files/claude-hooks.json` into `~/.claude/settings.json` as they are (or adapt them to your agent).
-
-### Optional: use it from your phone
-
-The template's `settings.json` sets `"remote": 8443`, which serves the board to your other devices over [Tailscale](https://tailscale.com) while everything keeps running on the desktop.
-
-1. Install Tailscale on the desktop and the phone, logged into the same account. In the admin console, enable MagicDNS and HTTPS certificates.
-2. Start the app: it runs `tailscale serve --bg --https=8443` itself. Problems show on the Health card as `remote` errors.
-3. On the phone, open `https://<desktop>.<tailnet>.ts.net:8443` in Safari and add it to the home screen. In iOS Settings → VPN → Tailscale, turn on Connect On Demand.
-4. Open the installed app and tap Enable when it offers notifications. Desktop notifications are then also sent to the phone while the desktop is locked or idle (see `push` in `settings.json`).
-
-Offline, the phone shows the board as of its last contact and queues writes and runs until the desktop is back. A desktop that sleeps stops serving: on a MacBook, enable "Prevent automatic sleeping on power adapter when the display is off".
 
 ## Develop
 
 ```sh
-SWITCHBOARD_HOME=/tmp/switchboard-dev make dev   # window with hot reload, against a scratch folder
-make test                                    # cargo test, vitest, front-end build
-make check                                   # clippy (whole workspace) and TypeScript, including template cards
-make bench                                   # loader and engine benchmark
+SWITCHBOARD_HOME=/tmp/switchboard-dev make dev   # window with hot reload, against a temp folder
 ```
 
-`template/` is only copied when the folder doesn't exist: delete the scratch folder to pick up template changes. `cd app && npm run dev` serves the shell in a browser against a mock backend.
+Note that `template/` is only copied when the folder doesn't exist. Delete the scratch folder to pick up template changes. 
 
-### More information
 
-See [architecture.md](architecture.md).
+See [Makefile](Makefile) for other commands, including `check` and `test`.
+
+See [architecture.md](architecture.md) for a full architecture breakdown.
+

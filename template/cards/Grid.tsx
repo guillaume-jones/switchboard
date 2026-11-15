@@ -29,6 +29,8 @@ const TITLE_BAR: CSSProperties = {
   background: 'var(--panel)',
   cursor: 'move',
 }
+/** Sized by its content, up to most of the screen, so cards that scroll internally still fit. */
+const LIST_TILE: CSSProperties = { ...FRAME, height: undefined, maxHeight: '75dvh' }
 const REMOVE_BUTTON: CSSProperties = { border: 'none', background: 'none', padding: 0, cursor: 'pointer' }
 /** A corner grip drawn inside the tile's bottom-right corner, with a larger hit area than it looks. */
 const RESIZE_HANDLE: CSSProperties = {
@@ -43,7 +45,8 @@ const RESIZE_HANDLE: CSSProperties = {
   opacity: 0.7,
 }
 
-export default function Grid({ grid }: CardProps<{ grid: string }>) {
+/** Tiles placed on a 12-column grid, or with `layout: "list"` stacked full width in reading order (`y`, then `x`). */
+export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?: 'list' }>) {
   const rows = useQuery<Tile>('ui.tiles', { grid })
   const tiles = useMemo(
     () => (rows ?? []).map(tile => ({ ...tile, props: JSON.parse(tile.props || '{}') as Record<string, unknown> })),
@@ -97,6 +100,20 @@ export default function Grid({ grid }: CardProps<{ grid: string }>) {
     handle.addEventListener('lostpointercapture', onRelease, { once: true })
   }
 
+  if (layout === 'list') {
+    return (
+      <div style={{ padding: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {tiles.map(tile => (
+          <div key={tile.id} style={LIST_TILE}>
+            <div style={{ ...TITLE_BAR, cursor: undefined }}>{tile.component}</div>
+            <div style={{ overflow: 'auto' }}>
+              <CardSlot component={tile.component} props={tile.props} id={`${grid}/${tile.id}`} />
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+  }
   const boxes = tiles.map(tile => (drag?.id === tile.id ? { ...tile, ...drag } : tile))
   const height = Math.max(MIN_ROWS, ...boxes.map(box => box.y + box.h)) * ROW_HEIGHT
 

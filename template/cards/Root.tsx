@@ -1,44 +1,36 @@
-import type { CSSProperties } from 'react'
+import { useLayoutEffect, useMemo, type CSSProperties } from 'react'
 import { CardSlot } from 'switchboard'
+import { THEME, useMobile } from './lib/theme'
 
-/** Theme variables used by every card and by the shell. */
-const THEME = `
-:root {
-  --bg: #fff; --fg: #1d1d1f; --muted: #6e6e73; --border: #d2d2d7;
-  --panel: #f2f2f4; --accent: #0a64d8; --bad: #c62828;
-  font: 13px/1.4 system-ui, -apple-system, sans-serif;
+const HEALTH: CSSProperties = {
+  position: 'fixed',
+  top: 'calc(6px + env(safe-area-inset-top))',
+  right: 8,
+  zIndex: 5,
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1c1c1e; --fg: #e5e5e7; --muted: #8e8e93; --border: #3a3a3c;
-    --panel: #2a2a2d; --accent: #4c9bff; --bad: #ff6b6b;
-  }
-}
-button, input, textarea, select {
-  font: inherit; color: inherit; background: var(--panel);
-  border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px;
-}
-`
-
-const HEADER: CSSProperties = {
+const FOOTER: CSSProperties = {
   display: 'flex',
-  gap: 12,
-  alignItems: 'center',
-  padding: '4px 8px',
-  borderBottom: '1px solid var(--border)',
+  padding: '6px 8px calc(6px + env(safe-area-inset-bottom))',
+  borderTop: '1px solid var(--border)',
 }
 
+/** Boards, with Health floating over them and the session box as a footer; boards become a list on phones. */
 export default function Root() {
+  const mobile = useMobile()
+  useLayoutEffect(() => void document.documentElement.toggleAttribute('data-mobile', mobile), [mobile])
+  const boards = useMemo(() => ({ client: mobile ? 'mobile' : 'desktop' }), [mobile])
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh' }}>
       <style>{THEME}</style>
-      <header style={HEADER}>
-        <CardSlot component="SessionBox" id="session-box" size="compact" />
+      <div className="chip" style={HEALTH}>
         <CardSlot component="Health" id="health" size="compact" />
-      </header>
-      <main style={{ flex: 1, overflow: 'auto' }}>
-        <CardSlot component="Boards" id="boards" />
+      </div>
+      <main style={{ flex: 1, overflow: 'auto', paddingTop: 'env(safe-area-inset-top)' }}>
+        <CardSlot component="Boards" id="boards" props={boards} />
       </main>
+      <footer style={FOOTER}>
+        <CardSlot component="SessionBox" id="session-box" size="compact" />
+      </footer>
     </div>
   )
 }

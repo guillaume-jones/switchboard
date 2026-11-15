@@ -392,7 +392,7 @@ fn first_run_creates_a_git_folder_from_the_template() {
     let (engine, _rx) = open(&h);
     assert!(h.join("cards/Root.tsx").exists());
     assert!(!h.join("data/spool").exists());
-    assert_eq!(engine.query("ui.boards", json!({})).unwrap(), json!([]));
+    assert_eq!(engine.query("ui.boards", json!({"client": "desktop"})).unwrap(), json!([]));
     assert_eq!(fs::read_to_string(h.join(".gitignore")).unwrap(), "data/\ncards/switchboard.d.ts\n");
     let hook = fs::read_to_string(h.join(".git/hooks/pre-commit")).unwrap();
     assert!(hook.contains("exec \"$SWB\" check"), "{hook}");

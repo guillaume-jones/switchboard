@@ -22,7 +22,7 @@ export default function SessionBox({ slot }: CardProps) {
 
   return (
     <form
-      style={{ display: 'flex', gap: 8, alignItems: 'center', flex: 1 }}
+      style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', flex: 1 }}
       onKeyDown={e => {
         if (e.key === 'Enter' && e.metaKey) {
           e.preventDefault()
@@ -50,13 +50,13 @@ export default function SessionBox({ slot }: CardProps) {
         value={prompt}
         onChange={e => setPrompt(e.target.value)}
         placeholder={cwd.trim() ? `Ask Claude in ${cwd.trim()}` : 'Ask Claude to change this app'}
-        style={{ flex: 1 }}
+        style={{ flex: '1 1 240px' }}
       />
       <input
         value={cwd}
         onChange={e => setCwd(e.target.value)}
         placeholder="in this app, or a folder"
-        style={{ width: 180 }}
+        style={{ flex: '0 1 180px', minWidth: 0 }}
       />
       <button type="submit">Start</button>
       {error ? <span style={{ color: 'var(--bad)' }}>{error}</span> : runId && <Status runId={runId} />}

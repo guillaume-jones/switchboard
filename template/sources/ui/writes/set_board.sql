@@ -1,2 +1,2 @@
-INSERT INTO ui.current (id, board) VALUES (1, :id)
-ON CONFLICT (id) DO UPDATE SET board = excluded.board
+INSERT INTO ui.current (client, board) VALUES (:client, :id)
+ON CONFLICT (client) DO UPDATE SET board = excluded.board

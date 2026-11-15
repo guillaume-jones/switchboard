@@ -122,13 +122,22 @@ On another device without a connection to the desktop, `useQuery` returns the la
 
 A subscription re-runs after every write to a table it reads and sends its whole result when it changes, so never mount a view over a growing table (`core_events`, `core_runs`, `core_firings`, your own logs) unless the filter keeps the result small (`kind: "error"`, one `run_id`). A filter that still matches a growing set, like `kind: "write"`, is as slow as none: use a query with a limit.
 
-Cards receive `size` and `slot` (the slot `id`). Per-slot UI state goes in `localStorage` keyed by `slot`; navigation and layout live in the `ui` source. `Root.tsx` defines the theme variables (`--bg --fg --muted --border --panel --accent --bad`) that cards and the shell use.
+Cards receive `size` and `slot` (the slot `id`). Per-slot UI state goes in `localStorage` keyed by `slot`; navigation and layout live in the `ui` source, with the current board per client (`desktop` or `mobile`, passed down from `Root`). Shared styles live in `cards/lib/theme.ts`: `THEME` (the variables `--bg --fg --muted --border --panel --accent --bad`, element defaults and classes such as `.chip`), which `Root.tsx` injects once. Add shared styles there rather than per card.
+
+## Mobile
+
+The same cards run on a phone, served by the desktop (see `remote`). `Root` sets `data-mobile` on `<html>` for phone-sized touch screens (`MOBILE_QUERY` in `lib/theme.ts`; `useMobile()` reads it in a card), and boards render as one long list (`Grid` with `layout: "list"`).
+
+- Prefer fluid layouts (`flex-wrap`, `grid-template-columns: repeat(auto-fill, minmax(...))`) over fixed widths. A card in a narrow desktop tile has the same constraints as a phone.
+- Target phones in CSS with `:root[data-mobile] ...`; inline styles cannot hold media queries.
+- Every action needs a visible control: key bindings, the palette and ⌘↩ do not exist on a phone, and neither does hover.
+- Check a card at phone width (390 px) when you change its layout.
 
 ## Key bindings
 
 ```json
 { "key": "f", "context": "card:PRList && selected", "command": "prs.fix-ci", "args": { "pr": "{selected}" } }
-{ "key": "cmd-]", "context": "card:Boards", "write": "ui.next_board" }
+{ "key": "cmd-]", "context": "card:Boards", "write": "ui.next_board", "args": { "client": "{client}" } }
 ```
 
 Exactly one of `command` (source, built-in, or shell: `palette.open`, `card.focus_next`, `card.focus_prev`, `keymap.context`) or `write`; `null` unbinds. Context: `card:<Name>`, variable names, `&&`, `||`, `!`, `>` (descendant), parentheses. Innermost match wins. `{var}` is the nearest card's, `{Card.var}` explicit; a missing variable disables the binding. `keymap.context` (cmd-shift-k) shows the stack and which binding a key hits.

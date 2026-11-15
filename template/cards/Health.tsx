@@ -9,13 +9,13 @@ type CoreEvent = { id: number; time: string; name: string; message: string }
 const URGENT_LEVEL = 2
 const RECENT_ERRORS = 20
 
-const LINE: CSSProperties = { display: 'flex', gap: 8, alignItems: 'baseline' }
+const LINE: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline' }
 const MUTED: CSSProperties = { color: 'var(--muted)' }
 const POPOVER: CSSProperties = {
   position: 'absolute',
   right: 0,
   top: '100%',
-  width: 520,
+  width: 'min(520px, calc(100vw - 16px))',
   maxHeight: '60vh',
   overflow: 'auto',
   background: 'var(--bg)',
@@ -25,7 +25,7 @@ const POPOVER: CSSProperties = {
 }
 const SUMMARY_BUTTON: CSSProperties = { border: 'none', background: 'none', padding: 0, cursor: 'pointer' }
 
-/** Open attention items, disabled rules, runs in an unknown state and recent errors. Compact: a summary with a popover. */
+/** Open attention items, disabled rules, runs in an unknown state and recent errors. Compact: a count with a popover. */
 export default function Health({ size }: CardProps) {
   const attention = useQuery<AttentionItem>('attention_open') ?? []
   const disabledRules = useQuery<Rule>('core_rules', { enabled: 0 }) ?? []
@@ -40,6 +40,7 @@ export default function Health({ size }: CardProps) {
     { count: errors.length, one: 'error', many: errors.length < RECENT_ERRORS ? 'errors' : 'recent errors' },
   ].filter(problem => problem.count > 0)
   const healthy = problems.length === 0
+  const total = problems.reduce((sum, problem) => sum + problem.count, 0)
   const summary = healthy
     ? 'healthy'
     : problems.map(({ count, one, many }) => `${count} ${count === 1 ? one : many}`).join(' · ')
@@ -92,9 +93,10 @@ export default function Health({ size }: CardProps) {
       <button
         onClick={() => setOpen(isOpen => !isOpen)}
         disabled={healthy}
+        title={summary}
         style={{ ...SUMMARY_BUTTON, color: healthy ? 'var(--muted)' : 'var(--bad)' }}
       >
-        {summary}
+        {healthy ? '●' : `● ${total}`}
       </button>
       {open && !healthy && <div style={POPOVER}>{details}</div>}
     </span>

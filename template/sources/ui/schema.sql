@@ -6,8 +6,9 @@ CREATE TABLE boards (
   position INTEGER NOT NULL
 );
 
+-- The board each kind of client shows: `desktop` or `mobile`.
 CREATE TABLE current (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
+  client TEXT PRIMARY KEY,
   board TEXT
 );
 

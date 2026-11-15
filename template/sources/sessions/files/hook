@@ -1,5 +1,5 @@
 #!/bin/dash
 # Records a Claude Code hook event (JSON on stdin) in sessions.items, with the host app (bundle id, else $TERM_PROGRAM) and entrypoint it ran under.
 # dash, not zsh: it starts in half the time, and this runs on every tool call.
-PATH=$PATH:/usr/local/bin
+PATH=$PATH:/usr/local/bin:/Applications/Switchboard.app/Contents/MacOS
 exec "${SWB:-swb}" write sessions.claude_hook host="${SWB_SESSION_HOST:-${__CFBundleIdentifier:-$TERM_PROGRAM}}" entrypoint="$CLAUDE_CODE_ENTRYPOINT"

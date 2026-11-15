@@ -224,8 +224,8 @@ fn load_scoped(home: &Path, mode: Mode, scope: Scope) -> Result<Loaded, Vec<Diag
     let settings_text = folder_file("settings.json");
     let settings_json = settings_text.as_deref().map_or(Value::Null, |t| diags.parse_json("settings.json", t));
     let settings = Settings::parse(&settings_json, &mut diags);
-    if !settings.menu_bar.is_empty() && !views.contains_key(&settings.menu_bar) {
-        diags.error("settings.json", format!("menu_bar: no view named {}", settings.menu_bar));
+    if !settings.badge.is_empty() && !views.contains_key(&settings.badge) {
+        diags.error("settings.json", format!("badge: no view named {}", settings.badge));
     }
 
     let card_modules = match scope {

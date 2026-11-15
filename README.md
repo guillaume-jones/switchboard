@@ -12,7 +12,6 @@ Requires git.
 
 - **MacOS**: [Switchboard.dmg](https://github.com/guillaume-jones/switchboard/releases/latest/download/Switchboard.dmg)
   - macOS will refuse to open the app at first. Go to System Settings → Privacy & Security and click Open Anyway.
-  - The app will ask for an admin password to link the `swb` CLI.
 - **Linux**: [Switchboard.deb](https://github.com/guillaume-jones/switchboard/releases/latest/download/Switchboard.deb) or [Switchboard.rpm](https://github.com/guillaume-jones/switchboard/releases/latest/download/Switchboard.rpm)
   - `sudo apt install ./Switchboard.deb`  or  `sudo dnf install ./Switchboard.rpm`
 
@@ -26,11 +25,11 @@ Other notes:
 
 The app can serve a mobile web app over Tailscale, with notifications & offline caching when the desktop disconnects.
 
-1. Install Tailscale on your desktop and phone, logged into the same account. In the admin console, enable MagicDNS and HTTPS certificates.
-2. Start the app.
-3. On the phone, open `https://<desktop>.<tailnet>.ts.net:8443` and add it to the home screen. 
-4. (Mac only) To keep the app online, enable "Prevent automatic sleeping on power adapter when the display is off" in Battery settings.
-5. (Linux only) Let the app run `tailscale serve` without root: `sudo tailscale set --operator=$USER`.
+1. Install Tailscale on your desktop and phone, logged into the same account. In the admin console, enable MagicDNS and HTTPS certificates. 
+2. (Linux only) Let the app run `tailscale serve` without root: `sudo tailscale set --operator=$USER`.
+3. Start the app.
+4. On the phone, open `https://<desktop>.<tailnet>.ts.net:8443` and add it to the home screen. 
+5. (Mac only) To keep the app online, enable "Prevent automatic sleeping on power adapter when the display is off" in Battery settings.
 
 
 ### Build from source

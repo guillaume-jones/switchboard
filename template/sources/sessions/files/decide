@@ -2,7 +2,7 @@
 # PermissionRequest hook: records the request, then waits for an answer from Switchboard (sessions.decide).
 # Exits without a decision, leaving it to the session's own prompt, once the request is answered elsewhere or
 # superseded, Claude Code's process is gone, or Switchboard cannot be reached.
-path+=(/usr/local/bin)
+path+=(/usr/local/bin /Applications/Switchboard.app/Contents/MacOS)
 swb=${SWB:-swb}
 payload=$(cat)
 print -r -- $payload | /bin/dash "${0:h}/hook" || exit 0

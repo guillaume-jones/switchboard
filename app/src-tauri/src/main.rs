@@ -4,8 +4,6 @@ use std::fs;
 use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::Duration;
 use switchboard_core::{Engine, Origin, Settings, SystemEvent};
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -25,7 +23,7 @@ pub(crate) struct App {
     /// Set once the board is served to other devices.
     push: OnceLock<push::Push>,
     hotkey: Mutex<String>,
-    menu_bar: Mutex<(String, u64)>,
+    badge: Mutex<(String, u64)>,
 }
 
 const IDLE_POLL: Duration = Duration::from_secs(15);
@@ -95,15 +93,20 @@ fn settings(app: &AppHandle) -> Option<Settings> {
 
 fn count(app: &AppHandle, rows: &Value) {
     let n = rows.as_array().map_or(0, Vec::len);
+    #[cfg(target_os = "macos")]
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_badge_count(Some(n as i64));
+    }
+    #[cfg(not(target_os = "macos"))]
     if let Some(tray) = app.tray_by_id("switchboard") {
         let _ = tray.set_title(Some(if n == 0 { "○".into() } else { format!("● {n}") }));
     }
 }
 
-fn menu_bar(app: &AppHandle) {
-    let view = settings(app).map(|s| s.menu_bar).unwrap_or_default();
+fn badge(app: &AppHandle) {
+    let view = settings(app).map(|s| s.badge).unwrap_or_default();
     let state = app.state::<App>();
-    let mut current = state.menu_bar.lock().unwrap();
+    let mut current = state.badge.lock().unwrap();
     let Ok(engine) = &*state.engine.read().unwrap() else { return };
     if current.0 == view {
         return;
@@ -140,7 +143,7 @@ struct Forward(AppHandle);
 impl switchboard_core::Emitter for Forward {
     fn emit(&self, event: &str, payload: Value) {
         match event {
-            "rows" if payload["id"] == self.0.state::<App>().menu_bar.lock().unwrap().1 => {
+            "rows" if payload["id"] == self.0.state::<App>().badge.lock().unwrap().1 => {
                 count(&self.0, &payload["rows"])
             }
             "notify" => {
@@ -166,7 +169,7 @@ impl switchboard_core::Emitter for Forward {
             }
             "config" => {
                 hotkey(&self.0);
-                menu_bar(&self.0);
+                badge(&self.0);
             }
             _ => {}
         }
@@ -189,6 +192,8 @@ fn main() {
             .callback(|app, _, _| forward(app))
             .build(),
     );
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_plugin_dialog::init());
     let app = builder
         .plugin(tauri_plugin_notification::init())
         .plugin(
@@ -206,7 +211,7 @@ fn main() {
             remote: remote::Clients::default(),
             push: OnceLock::new(),
             hotkey: Mutex::default(),
-            menu_bar: Mutex::default(),
+            badge: Mutex::default(),
         })
         .invoke_handler(tauri::generate_handler![call])
         .on_page_load(|webview, payload| {
@@ -225,39 +230,60 @@ fn main() {
             }
         })
         .setup(|app| {
-            let show = MenuItem::with_id(app, "show", "Show Switchboard", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let tray = TrayIconBuilder::with_id("switchboard")
-                .title("○")
-                .tooltip("Switchboard")
-                .menu(&Menu::with_items(app, &[&show, &quit])?)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, e| match e.id.as_ref() {
-                    "show" => forward(app),
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, e| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left, button_state: MouseButtonState::Up, ..
-                    } = e
-                    {
-                        forward(tray.app_handle())
-                    }
-                });
-            // Linux trays show nothing without an icon; macOS shows the title alone.
             #[cfg(not(target_os = "macos"))]
-            let tray = tray.icon(app.default_window_icon().cloned().ok_or("no app icon")?);
-            tray.build(app)?;
-            #[cfg(all(target_os = "macos", not(debug_assertions)))]
-            if let Ok(exe) = std::env::current_exe()
-                && !std::path::Path::new("/usr/local/bin/swb").exists()
             {
-                let script = format!(
-                    "do shell script \"mkdir -p /usr/local/bin && ln -sf '{}' /usr/local/bin/swb\" with prompt \"Switchboard wants to install its swb command.\" with administrator privileges",
-                    exe.with_file_name("swb").display()
-                );
-                let _ = std::process::Command::new("osascript").args(["-e", &script]).spawn();
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+                let show = MenuItem::with_id(app, "show", "Show Switchboard", true, None::<&str>)?;
+                let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+                TrayIconBuilder::with_id("switchboard")
+                    .icon(app.default_window_icon().cloned().ok_or("no app icon")?)
+                    .title("○")
+                    .tooltip("Switchboard")
+                    .menu(&Menu::with_items(app, &[&show, &quit])?)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, e| match e.id.as_ref() {
+                        "show" => forward(app),
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, e| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left, button_state: MouseButtonState::Up, ..
+                        } = e
+                        {
+                            forward(tray.app_handle())
+                        }
+                    })
+                    .build(app)?;
+            }
+            #[cfg(all(target_os = "macos", not(debug_assertions)))]
+            {
+                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+                let declined = app.path().app_data_dir()?.join("swb-declined");
+                if let Ok(exe) = std::env::current_exe()
+                    && !std::path::Path::new("/usr/local/bin/swb").exists()
+                    && !declined.exists()
+                {
+                    let handle = app.handle().clone();
+                    std::thread::spawn(move || {
+                        let install = handle
+                            .dialog()
+                            .message("Install the swb command-line tool in /usr/local/bin, so your terminal and agents can use it? macOS will ask for your password.")
+                            .title("Install swb")
+                            .buttons(MessageDialogButtons::OkCancelCustom("Install".into(), "Not now".into()))
+                            .blocking_show();
+                        if !install {
+                            let _ = fs::create_dir_all(declined.parent().unwrap()).and_then(|()| fs::write(&declined, ""));
+                            return;
+                        }
+                        let script = format!(
+                            "do shell script \"mkdir -p /usr/local/bin && ln -sf '{}' /usr/local/bin/swb\" with prompt \"Switchboard needs your password to install swb in /usr/local/bin.\" with administrator privileges",
+                            exe.with_file_name("swb").display()
+                        );
+                        let _ = std::process::Command::new("osascript").args(["-e", &script]).status();
+                    });
+                }
             }
             let handle = app.handle().clone();
             let home = switchboard_core::home();
@@ -273,7 +299,7 @@ fn main() {
             if let Some(port) = settings(&handle).and_then(|s| s.remote) {
                 remote::start(handle.clone(), port);
             }
-            menu_bar(&handle);
+            badge(&handle);
             hotkey(&handle);
             let on_event = {
                 let handle = handle.clone();

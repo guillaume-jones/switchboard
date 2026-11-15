@@ -574,17 +574,17 @@ fn core_views_never_filter() {
 }
 
 #[test]
-fn menu_bar_names_an_existing_view() {
+fn badge_names_an_existing_view() {
     let h = home(PRS);
-    write(h.path(), &[("settings.json", r#"{"menu_bar": "prs_nope"}"#)]);
-    assert_eq!(errors(h.path()), "settings.json: error: menu_bar: no view named prs_nope");
-    write(h.path(), &[("settings.json", r#"{"menu_bar": 1}"#)]);
-    assert_eq!(errors(h.path()), "settings.json: error: menu_bar must be a string");
-    for menu_bar in ["prs_items", ""] {
-        write(h.path(), &[("settings.json", &format!(r#"{{"menu_bar": "{menu_bar}"}}"#))]);
-        assert_eq!(ok(h.path(), Mode::Check).settings.menu_bar, menu_bar);
+    write(h.path(), &[("settings.json", r#"{"badge": "prs_nope"}"#)]);
+    assert_eq!(errors(h.path()), "settings.json: error: badge: no view named prs_nope");
+    write(h.path(), &[("settings.json", r#"{"badge": 1}"#)]);
+    assert_eq!(errors(h.path()), "settings.json: error: badge must be a string");
+    for badge in ["prs_items", ""] {
+        write(h.path(), &[("settings.json", &format!(r#"{{"badge": "{badge}"}}"#))]);
+        assert_eq!(ok(h.path(), Mode::Check).settings.badge, badge);
     }
-    assert_eq!(ok(home(PRS).path(), Mode::Check).settings.menu_bar, "");
+    assert_eq!(ok(home(PRS).path(), Mode::Check).settings.badge, "");
 }
 
 #[test]

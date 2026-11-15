@@ -1,5 +1,5 @@
 //! The writer thread: drains every pending message into one transaction (group commit), fires rules, starts
-//! queued runs, writes the batch's events, commits, then re-runs the reads the batch dirtied.
+//! queued runs, writes the batch's events, commits, then queues the reads the batch dirtied for the refresh thread.
 
 use super::reads::{DirtyTables, bind, query_rows, reject_unknown_params};
 use super::triggers::Occurrence;
@@ -139,6 +139,7 @@ impl WriteLoop {
                 self.shared.reload(&mut self.conn);
             }
             if settled.stop {
+                let _ = self.shared.refresh_queue.send(None);
                 return;
             }
         }

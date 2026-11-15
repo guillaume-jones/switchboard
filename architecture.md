@@ -126,14 +126,14 @@ Limits, all computed from `core` tables:
 flowchart LR
   IN["socket · Tauri IPC · runner<br/>scheduler tick · file watcher"] -- "messages" --> WT
   WT["Writer thread<br/>drain queue → BEGIN → writer per SAVEPOINT<br/>→ start queued runs → events → COMMIT"]
-  WT -- "dirty tables + run ids" --> RD["Re-run active reads<br/>≤ 4 read-only connections"]
+  WT -- "dirty tables + run ids" --> RD["Refresh thread: re-run active reads<br/>≤ 4 read-only connections"]
   RD -- "hash changed" --> OUT["rows → cards<br/>rows → rule evaluation (back to writer thread)"]
   WT -- "spawn" --> RUN["Runner"]
   RUN -- "into write, run exit" --> WT
 ```
 
 - **Write path:** one writer connection with every source DB attached and every view as a temp view. Each loop iteration drains all pending messages into one transaction (group commit), then starts queued runs, writes buffered events, commits and replies.
-- **Invalidation:** when the loader prepares a view or query, SQLite's authorizer reports every base table it reads, through any depth of views; writers report the tables they write. After a commit, every active read (subscribed by a card or watched by a rule) whose tables intersect the dirty set is re-run. Only a changed result hash is pushed to cards or evaluated by rules. Granularity is per table, and a whole result is re-sent when it changes.
+- **Invalidation:** when the loader prepares a view or query, SQLite's authorizer reports every base table it reads, through any depth of views; writers report the tables they write. After a commit, every active read (subscribed by a card or watched by a rule) whose tables intersect the dirty set is queued for the refresh thread, which re-runs it so the writer never waits on a read. Queued refreshes run in order, and each read runs once for everything queued while the previous pass ran, so a slow read updates less often instead of slowing writes. Only a changed result hash is pushed to cards or evaluated by rules. Granularity is per table, and a whole result is re-sent when it changes.
 - **Runner:** spawns command processes, enforces timeouts by killing the process group, captures stdout for `into` and the outcome line, and reports the exit back to the writer thread. The tick marks `running` runs whose process is gone and expired `open` runs as `unknown`, and trims events and runs past `retention`.
 - **Reload:** file changes (debounced 100 ms; `data/`, `.git` and `switchboard.d.ts` ignored) re-run the loader. Only a clean load is swapped in: connections are rebuilt, subscriptions re-resolved, rules re-synced, and changed cards pushed for hot reload; the app swaps a card in once its new version has loaded, so it neither blanks nor drops its subscriptions. Otherwise the last good state keeps running and the errors go to `core_events`. If the folder fails at startup, the app runs the `core` source alone.
 - **Socket:** `data/swb.sock` serves `swb`. On start, `data/spool/` is replayed in order before accepting connections.

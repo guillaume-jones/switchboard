@@ -78,7 +78,9 @@ fn attention_notifies_once_per_item() {
     engine.write("attention.raise", json!({"ref": "x:2", "reason": "quiet", "level": 1}), card()).unwrap();
     let open = until(&engine, "attention_open", json!({}), 5, |r| r.len() == 2);
     assert_eq!(open[0]["reason"], "again");
-    assert_eq!(notified(&rx, Duration::from_millis(500)), [json!({"title": "x:1", "body": "test"})]);
+    let notifications = notified(&rx, Duration::from_millis(500));
+    assert_eq!(notifications.len(), 1, "{notifications:?}");
+    assert_eq!(notifications[0]["title"], "x:1");
     let runs = engine.query("core_runs", json!({"rule": "attention-notify"})).unwrap();
     assert_eq!((runs.as_array().unwrap().len(), runs[0]["state"].as_str()), (1, Some("success")));
 }

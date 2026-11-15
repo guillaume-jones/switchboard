@@ -1,6 +1,6 @@
 TRIPLE := $(shell rustc -vV | sed -n 's/^host: //p')
 
-BIN ?= /usr/local/bin
+BIN ?= $(if $(shell test -w /usr/local/bin && echo y),/usr/local/bin,$(HOME)/.local/bin)
 
 .PHONY: dev build install test bench check fmt sidecar
 

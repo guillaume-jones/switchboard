@@ -9,7 +9,7 @@ Everything it shows and does lives as files in `~/.switchboard`, written mostly 
 Requirements: macOS, Rust, Node 24 and git. The template's `sessions` source and edit box use [Claude Code](https://claude.com/claude-code), but can be replaced by any agent harness.
 
 ```sh
-make install    # BIN=~/.local/bin make install if /usr/local/bin isn't writable
+make install    # links swb into /usr/local/bin, or ~/.local/bin if that isn't writable
 open /Applications/Switchboard.app
 ```
 

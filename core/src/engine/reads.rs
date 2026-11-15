@@ -13,6 +13,7 @@ use std::fmt::Write as _;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+use std::sync::mpsc::Receiver;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -270,8 +271,49 @@ impl Shared {
         result
     }
 
-    /// Re-runs the reads, pushes changed results to their subscribers and sends them to their rules.
+    /// Queues the reads to re-run on the refresh thread, so a slow read never holds up the writer.
     pub(super) fn refresh(&self, refreshes: Vec<Refresh>) {
+        if !refreshes.is_empty() {
+            let _ = self.refresh_queue.send(Some(refreshes));
+        }
+    }
+
+    /// The refresh thread: runs queued refreshes in order, each read once for everything queued while the previous
+    /// pass ran, since a read sees every commit before it. Ends at `None`, which the writer sends when it stops.
+    pub(super) fn refresh_loop(&self, queue: &Receiver<Option<Vec<Refresh>>>) {
+        while let Ok(Some(first)) = queue.recv() {
+            let (mut batches, mut stop) = (vec![first], false);
+            for next in queue.try_iter() {
+                match next {
+                    Some(refreshes) => batches.push(refreshes),
+                    None => {
+                        stop = true;
+                        break;
+                    }
+                }
+            }
+            let mut merged: HashMap<ReadKey, Refresh> = HashMap::new();
+            for refresh in batches.into_iter().flatten() {
+                match merged.entry(refresh.key.clone()) {
+                    Entry::Vacant(entry) => _ = entry.insert(refresh),
+                    Entry::Occupied(mut entry) => {
+                        let queued = entry.get_mut();
+                        queued.force_rules |= refresh.force_rules;
+                        queued.caused_by.extend(refresh.caused_by);
+                        queued.caused_by.sort();
+                        queued.caused_by.dedup();
+                    }
+                }
+            }
+            self.run_refreshes(merged.into_values().collect());
+            if stop {
+                return;
+            }
+        }
+    }
+
+    /// Re-runs the reads, pushes changed results to their subscribers and sends them to their rules.
+    fn run_refreshes(&self, refreshes: Vec<Refresh>) {
         let jobs: Vec<(Refresh, String, Arc<ResolvedRead>)> = {
             let subscriptions = self.subscriptions.lock().unwrap();
             refreshes

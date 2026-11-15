@@ -250,3 +250,32 @@ fn a_slow_read_of_core_events_is_reported_once_per_slow_streak() {
     let reported = engine.query("core_events", json!({"kind": "slow_read", "name": "prs_slow"})).unwrap();
     assert_eq!(reported.as_array().unwrap().len(), 1, "{reported}");
 }
+
+#[test]
+fn writes_do_not_wait_for_slow_reads_and_pushes_end_on_the_latest_result() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), FILES);
+    let work =
+        "(WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < 800000) SELECT count(*) FROM k)";
+    write(
+        dir.path(),
+        &[("sources/prs/views/slow.sql", &format!("SELECT count(*) AS n, {work} AS work FROM prs.items"))],
+    );
+    let (tx, rx) = channel();
+    let engine = Engine::open(dir.path(), Events(Mutex::new(tx))).unwrap();
+    let started = Instant::now();
+    let (id, _) = engine.subscribe("prs_slow", json!({})).unwrap();
+    let read = started.elapsed();
+    assert!(read > Duration::from_millis(100), "the view must be slow for this test");
+    let slowest = (1..=10)
+        .map(|k| {
+            let started = Instant::now();
+            engine.write("prs.upsert", json!({"id": k, "title": "x", "state": "open"}), card()).unwrap();
+            started.elapsed()
+        })
+        .max()
+        .unwrap();
+    assert!(slowest < read / 4, "a write waited {slowest:?} behind a {read:?} read");
+    let last = pushes(&rx, read * 6).into_iter().rfind(|(event, p)| event == "rows" && p["id"] == id).expect("pushed");
+    assert_eq!(last.1["rows"][0]["n"], 10);
+}

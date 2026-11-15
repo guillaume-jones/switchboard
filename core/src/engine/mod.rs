@@ -8,7 +8,7 @@ mod writes;
 use crate::loader::{BUILTINS, Diagnostic, Loaded, Mode, SystemEvent, load, load_core_only};
 use anyhow::{Context, Result, anyhow, bail};
 use notify::{RecursiveMode, Watcher};
-use reads::{ReaderPool, Subscriptions};
+use reads::{ReaderPool, Refresh, Subscriptions};
 use rusqlite::Connection;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -182,6 +182,8 @@ pub(crate) struct Shared {
     subscriptions: Mutex<Subscriptions>,
     /// Incremented after every batch, so a subscription can tell whether a commit raced its first read.
     batches_committed: AtomicU64,
+    /// Reads to re-run, for the refresh thread; `None` stops it.
+    refresh_queue: Sender<Option<Vec<Refresh>>>,
     /// Run id → what executes it.
     pub(crate) children: Mutex<HashMap<String, Child>>,
     pub(crate) login_env: OnceLock<Vec<(String, String)>>,
@@ -361,6 +363,7 @@ impl Engine {
         watcher.watch(&home, RecursiveMode::Recursive)?;
 
         let (tx, rx) = channel();
+        let (refresh_queue, queued_refreshes) = channel();
         let shared = Arc::new(Shared {
             home: home.clone(),
             emitter: Box::new(emitter),
@@ -372,6 +375,7 @@ impl Engine {
             readers: Mutex::default(),
             subscriptions: Mutex::default(),
             batches_committed: AtomicU64::new(0),
+            refresh_queue,
             children: Mutex::default(),
             login_env: OnceLock::new(),
             stopping: AtomicBool::new(false),
@@ -382,6 +386,8 @@ impl Engine {
         let mut threads = Vec::new();
         let writer = writes::WriteLoop::new(shared.clone(), conn);
         threads.push(thread::spawn(move || writer.run(rx)));
+        let s = shared.clone();
+        threads.push(thread::spawn(move || s.refresh_loop(&queued_refreshes)));
         shared.sync_rules(&loaded);
         let s = shared.clone();
         thread::spawn(move || _ = s.login_env.get_or_init(|| crate::runner::login_env(&s)));

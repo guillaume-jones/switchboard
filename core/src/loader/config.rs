@@ -32,7 +32,13 @@ pub struct Settings {
     pub remote: Option<u16>,
     /// How long another device may hold a run it queued while offline before it is dropped instead of sent.
     pub queue_run_expiry: Duration,
+    /// When `core.notify` is also pushed to other devices: `off`, `locked`, `idle` or `always`.
+    pub push: String,
+    /// How long without keyboard or pointer input, and without an app keeping the display awake, before `idle`.
+    pub idle_after: Duration,
 }
+
+const PUSH_MODES: [&str; 4] = ["off", "locked", "idle", "always"];
 
 const SETTINGS: &str = "settings.json";
 
@@ -83,7 +89,7 @@ impl Settings {
             seconds("snapshot_retention", 604_800),
             seconds("retention", 2_592_000),
         );
-        let queue_run_expiry = seconds("queue_run_expiry", 3_600);
+        let (queue_run_expiry, idle_after) = (seconds("queue_run_expiry", 3_600), seconds("idle_after", 120));
         let remote = fields.get("remote").and_then(|v| {
             let port = positive_integer(v).and_then(|n| u16::try_from(n).ok());
             if port.is_none() {
@@ -99,7 +105,7 @@ impl Settings {
                 default.to_string()
             }
         };
-        Settings {
+        let settings = Settings {
             max_per_hour,
             max_depth,
             max_concurrency,
@@ -116,7 +122,13 @@ impl Settings {
             menu_bar: text("menu_bar", ""),
             remote,
             queue_run_expiry,
+            push: text("push", "idle"),
+            idle_after,
+        };
+        if !PUSH_MODES.contains(&settings.push.as_str()) {
+            diags.error(SETTINGS, format!("push must be one of {}", PUSH_MODES.join(", ")));
         }
+        settings
     }
 }
 
@@ -304,16 +316,21 @@ pub enum SystemEvent {
     Unlock,
     Online,
     Offline,
+    /// No input for `idle_after`, and no app keeping the display awake (video, unlike audio, does).
+    Idle,
+    Active,
 }
 
 impl SystemEvent {
-    pub const ALL: [SystemEvent; 6] = [
+    pub const ALL: [SystemEvent; 8] = [
         SystemEvent::Sleep,
         SystemEvent::Wake,
         SystemEvent::Lock,
         SystemEvent::Unlock,
         SystemEvent::Online,
         SystemEvent::Offline,
+        SystemEvent::Idle,
+        SystemEvent::Active,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -324,6 +341,8 @@ impl SystemEvent {
             SystemEvent::Unlock => "unlock",
             SystemEvent::Online => "online",
             SystemEvent::Offline => "offline",
+            SystemEvent::Idle => "idle",
+            SystemEvent::Active => "active",
         }
     }
 

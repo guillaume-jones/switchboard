@@ -60,7 +60,7 @@ Conventions: primary key on every table; provider JSON kept in `raw` and exposed
 | `when.schedule` | 5-field local cron. With a view, re-evaluates it; alone, fires once per slot (after sleep, only the latest missed slot; a new rule waits for its next slot) |
 | `when.files` | absolute or `~/` glob (`*` stays within one directory, `**` crosses them). Fires once a matching file changed and stayed quiet for 200 ms; gives `{path}`. A missing base directory is skipped until the next reload |
 | `when.line_contains` | with `when.files`: fires once per complete line appended to a matching file that contains this text, instead of per change; gives `{path}` and `{line}`. Lines present when the rule loads never fire |
-| `when.system` | `sleep`, `wake`, `lock`, `unlock`, `online` or `offline`; gives `{event}`. `offline` fires after the network stays unreachable for `offline_debounce`, `online` only after an `offline` |
+| `when.system` | `sleep`, `wake`, `lock`, `unlock`, `online`, `offline`, `idle` or `active`; gives `{event}`. `offline` fires after the network stays unreachable for `offline_debounce`, `online` only after an `offline`. `idle` fires after `idle_after` without input while no app keeps the display awake (video counts as attended, audio does not), `active` on the next input |
 | (triggers) | at most one of `schedule`, `files`, `system`. With a view, an occurrence re-evaluates it; alone, the rule fires once per occurrence |
 | `key` | required with `when.view`, forbidden without; `{col}` templates over the view's columns, else over the trigger's variables |
 | `run` | a command or built-in command |
@@ -99,6 +99,8 @@ Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started i
 | `depth_cap` | `20` | card nesting |
 | `remote` | none | HTTPS port that `tailscale serve` exposes the board on to your other devices; none keeps it local |
 | `queue_run_expiry` | `3600` | how long a run queued offline on another device may wait before it is dropped; writes never expire |
+| `push` | `"idle"` | when `core.notify` is also pushed to other devices' installed apps: `"off"`, `"locked"` (screen locked), `"idle"` (locked or idle) or `"always"` |
+| `idle_after` | `120` | no input for this long, with nothing keeping the display awake, is `idle` |
 
 ## Cards
 
@@ -133,7 +135,7 @@ Exactly one of `command` (source, built-in, or shell: `palette.open`, `card.focu
 
 ## Built-ins
 
-- Commands: `core.snapshot {source?}`, `core.restore {source, snapshot?}` (snapshots current data first), `core.notify {title, body}`.
+- Commands: `core.snapshot {source?}`, `core.restore {source, snapshot?}` (snapshots current data first), `core.notify {title, body}` (a macOS notification, also pushed to other devices per the `push` setting).
 - Writers: `core.rule_enable {rule}`, `core.run_finish {id, state, summary}`.
 - Views: `core_runs`, `core_firings`, `core_rules`, `core_items` (rules as `core:<rule>`), `core_events` (`kind`: `write`, `error`, `slow_read`). Core views expose every row and never filter; filter on top in your own views or with equality filters.
 - Queries: `core.timeline {limit}` (runs, firings and events, newest first), `core.events {kind, limit}` (newest events of a kind), `core.runs {limit}` (newest runs).

@@ -409,7 +409,7 @@ fn trigger_validation() {
     let e = errors(h.path());
     for expected in [
         "rules/a.json: error: a rule takes at most one trigger, got when.schedule, when.system",
-        "rules/b.json: error: when.system \"reboot\" is not a system event (expected sleep, wake, lock, unlock, online, offline)",
+        "rules/b.json: error: when.system \"reboot\" is not a system event (expected sleep, wake, lock, unlock, online, offline, idle, active)",
         "rules/c.json: error: when.files \"logs/*.log\" must be an absolute path or start with ~/",
         "rules/d.json: error: when.line_contains needs when.files",
         "rules/e.json: error: {line} is not a variable of the trigger (variables: path)",
@@ -585,6 +585,18 @@ fn menu_bar_names_an_existing_view() {
         assert_eq!(ok(h.path(), Mode::Check).settings.menu_bar, menu_bar);
     }
     assert_eq!(ok(home(PRS).path(), Mode::Check).settings.menu_bar, "");
+}
+
+#[test]
+fn push_and_idle_after() {
+    let h = home(PRS);
+    let settings = ok(h.path(), Mode::Check).settings;
+    assert_eq!((settings.push.as_str(), settings.idle_after.as_secs()), ("idle", 120));
+    write(h.path(), &[("settings.json", r#"{"push": "sometimes"}"#)]);
+    assert_eq!(errors(h.path()), "settings.json: error: push must be one of off, locked, idle, always");
+    write(h.path(), &[("rules/idle.json", r#"{"id": "idle", "when": {"system": "idle"}, "run": "core.snapshot"}"#)]);
+    write(h.path(), &[("settings.json", r#"{"push": "locked", "idle_after": 30}"#)]);
+    assert_eq!(ok(h.path(), Mode::Check).settings.push, "locked");
 }
 
 #[test]

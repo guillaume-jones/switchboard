@@ -1,6 +1,7 @@
 //! The board for other devices: the shell and the same calls as IPC over HTTP, on a local port that
 //! `tailscale serve` exposes as `https://<device>.<tailnet>.ts.net:<remote>` to the tailnet only.
 
+use crate::push::Push;
 use crate::{App, dispatch, with};
 use axum::Router;
 use axum::body::Body;
@@ -102,6 +103,7 @@ async fn serve(app: AppHandle, port: u16) -> Result<(), String> {
     let local = listener.local_addr().map_err(|e| e.to_string())?.port();
     let tailnet = tailnet(port)?;
     tailscale(&["serve", "--bg", &format!("--https={port}"), &format!("http://127.0.0.1:{local}")])?;
+    let _ = app.state::<App>().push.set(Push::open(format!("https://{}:{port}", tailnet.host))?);
     let router = Router::new()
         .route("/api/events", get(events))
         .route("/api/{command}", post(call))
@@ -135,6 +137,12 @@ async fn call(State(app): State<AppHandle>, Path(command): Path<String>, headers
         let client = state.remote.get(&client);
         if client.is_none() && command == "subscribe" {
             return Err("no open event stream for this client".into());
+        }
+        let push = || state.push.get().ok_or_else(|| "push is not available".to_string());
+        match command.as_str() {
+            "push_key" => return Ok(json!({ "key": push()?.public_key() })),
+            "push_subscribe" => return push()?.subscribe(args).map(|()| Value::Null),
+            _ => {}
         }
         let unowned = Mutex::default();
         dispatch(&state, client.as_ref().map_or(&unowned, |c| &c.subs), &command, args, "remote")

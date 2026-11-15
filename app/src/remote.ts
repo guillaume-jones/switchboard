@@ -13,7 +13,13 @@ export type Queued = {
   /** Why it was not sent: kept until dismissed. */
   error?: string
 }
-export type Status = { online: boolean; asOf: number | undefined; outbox: Queued[] }
+export type Status = {
+  online: boolean
+  asOf: number | undefined
+  outbox: Queued[]
+  /** `off` until the user enables notifications; push is only offered by home-screen apps. */
+  push: 'unavailable' | 'off' | 'on'
+}
 
 /** The desktop is unreachable, or the app on it is not running. */
 class Offline extends Error {}
@@ -23,7 +29,12 @@ const RETRY_MS = 5000
 const HELLO_WAIT_MS = 3000
 const AS_OF_KEY = 'switchboard.as_of'
 
-let status: Status = { online: false, asOf: Number(localStorage.getItem(AS_OF_KEY)) || undefined, outbox: [] }
+let status: Status = {
+  online: false,
+  asOf: Number(localStorage.getItem(AS_OF_KEY)) || undefined,
+  outbox: [],
+  push: 'unavailable',
+}
 const statusListeners = new Set<() => void>()
 
 function setStatus(next: Partial<Status>) {
@@ -154,6 +165,32 @@ function flush() {
   return flushing
 }
 
+const pushAvailable = () =>
+  matchMedia('(display-mode: standalone)').matches &&
+  'PushManager' in window &&
+  'Notification' in window &&
+  'serviceWorker' in navigator
+
+/** Sends this device's push subscription again, so the desktop's list survives it being reset. */
+async function syncPush() {
+  if (!pushAvailable() || Notification.permission === 'denied') return setStatus({ push: 'unavailable' })
+  const subscription = await (await navigator.serviceWorker.ready).pushManager.getSubscription()
+  if (!subscription || Notification.permission !== 'granted') return setStatus({ push: 'off' })
+  await post('push_subscribe', subscription.toJSON()).catch(() => {})
+  setStatus({ push: 'on' })
+}
+
+/** Must run from a tap: iOS only asks for permission in response to one. */
+export async function enableNotifications() {
+  if ((await Notification.requestPermission()) !== 'granted') return setStatus({ push: 'unavailable' })
+  const { key } = await post('push_key', {})
+  const applicationServerKey = Uint8Array.from(atob(key.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))
+  const registration = await navigator.serviceWorker.ready
+  const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })
+  await post('push_subscribe', subscription.toJSON())
+  setStatus({ push: 'on' })
+}
+
 export const cancel = async (id: string) => {
   await store('outbox', s => s.delete(id))
   await loadOutbox()
@@ -176,6 +213,7 @@ function open() {
     client = JSON.parse(event.data).client
     contact()
     hello()
+    syncPush()
     await flush()
     if (stale) emit('reconnect', null)
     stale = true

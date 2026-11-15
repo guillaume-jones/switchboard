@@ -11,7 +11,7 @@ import { isRemote, type Binding, type Config, type Params } from './bridge'
 import { useConfig } from './config'
 import { activeStack, focusStep, type SlotFrame } from './focus'
 import { bindingAction, eventKey, groupBindings, matchBindings, normalizeKey, type Action, type Hit } from './keymap'
-import { cancel, useRemoteStatus } from './remote'
+import { cancel, enableNotifications, useRemoteStatus } from './remote'
 
 const SHELL_COMMANDS = ['palette.open', 'keymap.context', 'card.focus_next', 'card.focus_prev'] as const
 type ShellCommand = (typeof SHELL_COMMANDS)[number]
@@ -93,16 +93,24 @@ function LoadedShell({ config }: { config: Config }) {
 
 const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
-/** On another device: when the board is from the cache, and the writes and runs waiting to be sent. */
+/** On another device: when the board is from the cache, the writes and runs waiting to be sent, and push. */
 function RemoteStatus() {
-  const { online, asOf, outbox } = useRemoteStatus()
+  const { online, asOf, outbox, push } = useRemoteStatus()
   const [open, setOpen] = useState(false)
-  if (online && outbox.length === 0) return null
+  const [error, setError] = useState('')
+  const offerPush = online && push === 'off'
+  if (online && outbox.length === 0 && !offerPush) return null
   return (
     <>
       <div className="status">
         {!online && <span>Offline{asOf ? ` · as of ${clock(asOf)}` : ''}</span>}
         {outbox.length > 0 && <button onClick={() => setOpen(true)}>{outbox.length} pending</button>}
+        {offerPush && (
+          <button onClick={() => enableNotifications().catch((e: Error) => setError(e.message))}>
+            Enable notifications
+          </button>
+        )}
+        {error && <span className="error">{error}</span>}
       </div>
       {open && outbox.length > 0 && (
         <Overlay close={() => setOpen(false)}>

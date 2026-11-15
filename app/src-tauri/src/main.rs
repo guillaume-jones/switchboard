@@ -2,13 +2,14 @@ use switchboard_core::{Engine, Origin, Settings};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::fs;
-use std::sync::{Mutex, RwLock};
+use std::sync::{Mutex, OnceLock, RwLock};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 
+mod push;
 mod remote;
 #[cfg(target_os = "macos")]
 mod system_events;
@@ -18,6 +19,8 @@ pub(crate) struct App {
     /// The window's subscriptions.
     subs: Mutex<HashSet<u64>>,
     remote: remote::Clients,
+    /// Set once the board is served to other devices.
+    push: OnceLock<push::Push>,
     hotkey: Mutex<String>,
     menu_bar: Mutex<(String, u64)>,
 }
@@ -141,6 +144,20 @@ impl switchboard_core::Emitter for Forward {
                     .title(payload["title"].as_str().unwrap_or_default())
                     .body(payload["body"].as_str().unwrap_or_default())
                     .show();
+                if settings(&self.0).is_some_and(|s| push::wanted(&s)) {
+                    let app = self.0.clone();
+                    let message = json!({ "title": payload["title"], "body": payload["body"] });
+                    tauri::async_runtime::spawn(async move {
+                        let state = app.state::<App>();
+                        let Some(push) = state.push.get() else { return };
+                        for error in push.send(message).await {
+                            let _ = with(&state, |e| {
+                                e.error("push", "core.notify", &error);
+                                Ok(Value::Null)
+                            });
+                        }
+                    });
+                }
             }
             "config" => {
                 hotkey(&self.0);
@@ -170,6 +187,7 @@ fn main() {
             engine: RwLock::new(Err("starting".into())),
             subs: Mutex::default(),
             remote: remote::Clients::default(),
+            push: OnceLock::new(),
             hotkey: Mutex::default(),
             menu_bar: Mutex::default(),
         })
@@ -221,11 +239,15 @@ fn main() {
             #[cfg(target_os = "macos")]
             {
                 let handle = handle.clone();
-                system_events::observe(move |event| {
-                    if let Ok(engine) = &*handle.state::<App>().engine.read().unwrap() {
-                        engine.system_event(event);
-                    }
-                });
+                let settings_handle = handle.clone();
+                system_events::observe(
+                    move |event| {
+                        if let Ok(engine) = &*handle.state::<App>().engine.read().unwrap() {
+                            engine.system_event(event);
+                        }
+                    },
+                    move || settings(&settings_handle).map_or(std::time::Duration::from_secs(120), |s| s.idle_after),
+                );
             }
             let _ = app.notification().on_action(move |_| forward(&handle));
             Ok(())

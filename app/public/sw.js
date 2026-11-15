@@ -1,4 +1,4 @@
-// Keeps the shell openable offline: every same-origin GET outside /api/ is answered from the cache and refreshed
+// Shows the desktop's notifications, and keeps the shell openable offline: every same-origin GET outside /api/ is answered from the cache and refreshed
 // in the background. A new index.html is cached only with the assets it references, so the next offline start
 // never finds half an update.
 const CACHE = 'switchboard-shell'
@@ -33,5 +33,17 @@ self.addEventListener('fetch', event => {
       event.waitUntil(fresh.catch(() => {}))
       return hit
     }),
+  )
+})
+
+self.addEventListener('push', event => {
+  const { title, body } = event.data?.json() ?? {}
+  event.waitUntil(self.registration.showNotification(title || 'Switchboard', { body }))
+})
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close()
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window' }).then(windows => windows[0]?.focus() ?? self.clients.openWindow('/')),
   )
 })

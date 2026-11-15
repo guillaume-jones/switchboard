@@ -45,7 +45,10 @@ const RESIZE_HANDLE: CSSProperties = {
   opacity: 0.7,
 }
 
-/** Tiles placed on a 12-column grid, or with `layout: "list"` stacked full width in reading order (`y`, then `x`). */
+/**
+ * Tiles placed on a 12-column grid, or with `layout: "list"` stacked full width in reading order (`y`, then `x`),
+ * where they can be added and removed but not moved.
+ */
 export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?: 'list' }>) {
   const rows = useQuery<Tile>('ui.tiles', { grid })
   const tiles = useMemo(
@@ -100,17 +103,51 @@ export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?
     handle.addEventListener('lostpointercapture', onRelease, { once: true })
   }
 
+  const addForm = (
+    <form
+      onSubmit={e => {
+        e.preventDefault()
+        const component = adding.trim()
+        if (component) {
+          mutate('ui.tile_add', { grid, id: `${component}-${Date.now().toString(36)}`, component, props: '{}' })
+        }
+        setAdding('')
+      }}
+    >
+      <input
+        value={adding}
+        onChange={e => setAdding(e.target.value)}
+        placeholder="Add card by name"
+        style={{ width: 200 }}
+      />
+    </form>
+  )
+  const removeButton = (id: string) => (
+    <button
+      title="Remove"
+      onPointerDown={e => e.stopPropagation()}
+      onClick={() => mutate('ui.tile_remove', { grid, id })}
+      style={REMOVE_BUTTON}
+    >
+      ×
+    </button>
+  )
+
   if (layout === 'list') {
     return (
       <div style={{ padding: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
         {tiles.map(tile => (
           <div key={tile.id} style={LIST_TILE}>
-            <div style={{ ...TITLE_BAR, cursor: undefined }}>{tile.component}</div>
+            <div style={{ ...TITLE_BAR, cursor: undefined }}>
+              <span style={{ flex: 1 }}>{tile.component}</span>
+              {removeButton(tile.id)}
+            </div>
             <div style={{ overflow: 'auto' }}>
               <CardSlot component={tile.component} props={tile.props} id={`${grid}/${tile.id}`} />
             </div>
           </div>
         ))}
+        {addForm}
       </div>
     )
   }
@@ -136,14 +173,7 @@ export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?
             <div style={FRAME}>
               <div onPointerDown={e => startDrag(e, box, 'move')} style={TITLE_BAR}>
                 <span style={{ flex: 1 }}>{box.component}</span>
-                <button
-                  title="Remove"
-                  onPointerDown={e => e.stopPropagation()}
-                  onClick={() => mutate('ui.tile_remove', { grid, id: box.id })}
-                  style={REMOVE_BUTTON}
-                >
-                  ×
-                </button>
+                {removeButton(box.id)}
               </div>
               <div style={{ flex: 1, overflow: 'auto' }}>
                 <CardSlot component={box.component} props={box.props} id={`${grid}/${box.id}`} />
@@ -153,23 +183,7 @@ export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?
           </div>
         ))}
       </div>
-      <form
-        onSubmit={e => {
-          e.preventDefault()
-          const component = adding.trim()
-          if (component) {
-            mutate('ui.tile_add', { grid, id: `${component}-${Date.now().toString(36)}`, component, props: '{}' })
-          }
-          setAdding('')
-        }}
-      >
-        <input
-          value={adding}
-          onChange={e => setAdding(e.target.value)}
-          placeholder="Add card by name"
-          style={{ width: 200 }}
-        />
-      </form>
+      {addForm}
     </div>
   )
 }

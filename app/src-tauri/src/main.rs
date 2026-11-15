@@ -220,6 +220,16 @@ fn main() {
                     }
                 })
                 .build(app)?;
+            #[cfg(not(debug_assertions))]
+            if let Ok(exe) = std::env::current_exe()
+                && !std::path::Path::new("/usr/local/bin/swb").exists()
+            {
+                let script = format!(
+                    "do shell script \"mkdir -p /usr/local/bin && ln -sf '{}' /usr/local/bin/swb\" with prompt \"Switchboard wants to install its swb command.\" with administrator privileges",
+                    exe.with_file_name("swb").display()
+                );
+                let _ = std::process::Command::new("osascript").args(["-e", &script]).spawn();
+            }
             let handle = app.handle().clone();
             let home = switchboard_core::home();
             let opened = Engine::open(&home, Forward(handle.clone())).map_err(|e| format!("{e:#}"));

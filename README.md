@@ -6,12 +6,18 @@ Everything it shows and does lives as files in `~/.switchboard`, written mostly 
 
 ## Install
 
-Requirements: macOS, Rust, Node 24 and git. The template's `sessions` source and edit box use [Claude Code](https://claude.com/claude-code), but can be replaced by any agent harness.
+Requirements: macOS and git. The template's `sessions` source and edit box use [Claude Code](https://claude.com/claude-code), but can be replaced by any agent harness.
+
+Download [Switchboard.dmg](https://github.com/guillaume-jones/switchboard/releases/latest/download/Switchboard.dmg), drag the app to Applications and open it. macOS will refuse at first, since the app isn't notarised: go to System Settings → Privacy & Security and click Open Anyway.
+
+To build from source instead (requires Rust and Node 24):
 
 ```sh
-make install    # links swb into /usr/local/bin, or ~/.local/bin if that isn't writable
+make install
 open /Applications/Switchboard.app
 ```
+
+On first start the app asks for an admin password to link its `swb` CLI into `/usr/local/bin`.
 
 On first start the app creates `~/.switchboard` from [`template/`](template), makes it a git repo with a pre-commit hook that runs `swb check`, and commits it. An existing folder is never overwritten.
 

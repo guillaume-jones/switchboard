@@ -1,7 +1,5 @@
 TRIPLE := $(shell rustc -vV | sed -n 's/^host: //p')
 
-BIN ?= $(if $(shell test -w /usr/local/bin && echo y),/usr/local/bin,$(HOME)/.local/bin)
-
 .PHONY: dev build install test bench check fmt sidecar
 
 dev: sidecar | app/node_modules
@@ -13,8 +11,6 @@ build: sidecar | app/node_modules
 install: build
 	rm -rf /Applications/Switchboard.app
 	cp -R target/release/bundle/macos/Switchboard.app /Applications/
-	mkdir -p $(BIN)
-	ln -sf /Applications/Switchboard.app/Contents/MacOS/swb $(BIN)/swb
 
 test: | app/node_modules
 	cargo test

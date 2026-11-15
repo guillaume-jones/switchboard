@@ -2,6 +2,5 @@
   "root": "Root",
   "terminal": "Terminal",
   "hotkey": "cmd-shift-space",
-  "badge": "attention_open",
-  "remote": 8443
+  "badge": "attention_open"
 }

@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
-use std::sync::atomic::Ordering::SeqCst;
+use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -28,6 +28,8 @@ pub(super) struct ResolvedRead {
     sql: String,
     binds: Vec<SqlValue>,
     tables: BTreeSet<String>,
+    /// Set once a slow run is reported, until a run is fast again.
+    reported_slow: AtomicBool,
 }
 
 pub(super) struct ReadResult {
@@ -172,7 +174,7 @@ fn resolve(loaded: &Loaded, name: &str, params: &Value) -> Result<ResolvedRead> 
             };
             let _ = write!(sql, " {} \"{column}\" {test}", if i == 0 { "WHERE" } else { "AND" });
         }
-        return Ok(ResolvedRead { sql, binds, tables: view.tables.clone() });
+        return Ok(ResolvedRead { sql, binds, tables: view.tables.clone(), reported_slow: AtomicBool::new(false) });
     }
     let Some(query) = loaded.queries.get(name) else {
         let hint = if loaded.writers.contains_key(name) { " (it is a writer; call write)" } else { "" };
@@ -180,7 +182,12 @@ fn resolve(loaded: &Loaded, name: &str, params: &Value) -> Result<ResolvedRead> 
     };
     reject_unknown_params(name, params, &query.params)?;
     let binds = bind(name, params, &query.params, &query.params, None)?;
-    Ok(ResolvedRead { sql: query.sql.clone(), binds, tables: query.tables.clone() })
+    Ok(ResolvedRead {
+        sql: query.sql.clone(),
+        binds,
+        tables: query.tables.clone(),
+        reported_slow: AtomicBool::new(false),
+    })
 }
 
 /// The rows as JSON objects, and a hash of the column names and values.
@@ -246,13 +253,16 @@ impl Shared {
         let start = Instant::now();
         let result = query_rows(conn, &read.sql, &read.binds).with_context(|| name.to_string());
         let elapsed = start.elapsed();
-        // Recording an event would dirty core.events and re-run this read, forever.
-        if read.tables.contains("core.events") {
-            return result;
-        }
-        if elapsed > SLOW_READ {
+        // Once per slow streak: the event dirties core.events, which re-runs this read if it reads core.events.
+        if elapsed <= SLOW_READ {
+            read.reported_slow.store(false, SeqCst);
+        } else if !read.reported_slow.swap(true, SeqCst) {
             let message = format!("{} ms", elapsed.as_millis());
             self.record(Event { kind: EventKind::SlowRead, name: name.into(), origin: Origin::engine(), message });
+        }
+        // Recording an error would dirty core.events and re-run this read, forever.
+        if read.tables.contains("core.events") {
+            return result;
         }
         if let Err(e) = &result {
             self.record(Event::error("sql", name, format!("{e:#}")));

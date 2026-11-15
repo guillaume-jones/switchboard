@@ -19,15 +19,27 @@ const listeners = new Set<() => void>()
 let generation = 0
 
 bridge.on('card', ({ name }) => {
-  cache.delete(name)
-  for (const listener of listeners) listener()
+  if (cache.has(name)) refresh(name)
 })
 
 // Cards may have changed while the connection was down.
 bridge.on('reconnect', () => {
-  cache.clear()
-  for (const listener of listeners) listener()
+  for (const name of cache.keys()) refresh(name)
 })
+
+/**
+ * Swaps in the card's new version once it has loaded, so its slots re-render without suspending, and the remounted card
+ * finds its subscriptions (closed a tick after unmount) still open, with their rows.
+ */
+function refresh(name: string) {
+  const next = fetchCard(name)
+  const swap = () => {
+    if (next.generation < (cache.get(name)?.generation ?? 0)) return
+    cache.set(name, next)
+    for (const listener of listeners) listener()
+  }
+  next.component.then(swap, swap)
+}
 
 export function watchCards(listener: () => void) {
   listeners.add(listener)
@@ -36,15 +48,17 @@ export function watchCards(listener: () => void) {
   }
 }
 
-/** Cached until the backend reports the card changed. */
+/** Cached; a changed card is replaced once its new version has loaded. */
 export function loadCard(name: string): LoadedCard {
   let card = cache.get(name)
-  if (!card) {
-    const component = bridge.card(name).then(modules => instantiate(name, modules))
-    exposeSettledState(component)
-    cache.set(name, (card = { generation: ++generation, component }))
-  }
+  if (!card) cache.set(name, (card = fetchCard(name)))
   return card
+}
+
+function fetchCard(name: string): LoadedCard {
+  const component = bridge.card(name).then(modules => instantiate(name, modules))
+  exposeSettledState(component)
+  return { generation: ++generation, component }
 }
 
 /** Every card gets its own instances of the `cards/lib` helpers it imports. */

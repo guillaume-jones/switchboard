@@ -14,6 +14,10 @@ impl Emitter for Quiet {
 }
 
 fn home(extra: &[(&str, &str)]) -> tempfile::TempDir {
+    // Commands run by an in-process engine find swb through this; newer Cargo moved test binaries away from it.
+    static SWB: std::sync::Once = std::sync::Once::new();
+    // SAFETY: engines, whose C code reads the environment, only start after a home() call has returned.
+    SWB.call_once(|| unsafe { std::env::set_var("SWITCHBOARD_SWB", env!("CARGO_BIN_EXE_swb")) });
     let dir = tempfile::tempdir().unwrap();
     let base = [
         ("sources/prs/schema.sql", "CREATE TABLE items (\n  id INTEGER PRIMARY KEY,\n  title TEXT\n);\n"),

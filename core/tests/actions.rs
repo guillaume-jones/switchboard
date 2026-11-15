@@ -319,6 +319,11 @@ fn schedule_fires_once_per_slot_and_once_for_missed_slots() {
 fn snapshot_and_restore() {
     let h = home(&[]);
     let (engine, _rx) = open(h.path());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fs::read_dir(h.path().join("data/snapshots/prs")).map_or(0, Iterator::count) == 0 {
+        assert!(Instant::now() < deadline, "the first tick snapshots a source that has none");
+        std::thread::sleep(Duration::from_millis(20));
+    }
     engine.write("prs.add", json!({"id": 1}), card()).unwrap();
     let snap = engine.run("core.snapshot", json!({"source": "prs"}), card()).unwrap();
     let run = until(&engine, "core_runs", json!({"id": snap}), 5, |r| r[0]["state"] == "success");

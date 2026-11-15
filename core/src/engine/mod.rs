@@ -356,7 +356,12 @@ impl Engine {
         let (changed, changes) = channel();
         let ignored = [home.join("data"), home.join(".git"), home.join("cards/switchboard.d.ts")];
         let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            if event.is_ok_and(|e| e.paths.iter().any(|p| !ignored.iter().any(|i| p.starts_with(i)))) {
+            // inotify also reports reads, such as the engine's own while loading.
+            let changed_paths = event.is_ok_and(|e| {
+                !matches!(e.kind, notify::EventKind::Access(_))
+                    && e.paths.iter().any(|p| !ignored.iter().any(|i| p.starts_with(i)))
+            });
+            if changed_paths {
                 let _ = changed.send(());
             }
         })?;

@@ -17,7 +17,7 @@ const SHELL_COMMANDS = ['palette.open', 'keymap.context', 'card.focus_next', 'ca
 type ShellCommand = (typeof SHELL_COMMANDS)[number]
 const isShellCommand = (name: string): name is ShellCommand => (SHELL_COMMANDS as readonly string[]).includes(name)
 
-const DEFAULT_KEYMAP: Binding[] = [{ key: 'cmd-k', command: 'palette.open' }]
+const DEFAULT_KEYMAP: Binding[] = [{ key: 'cmd-shift-p', command: 'palette.open' }]
 const NOTICE_MS = 5000
 const ARROW_STEPS: Partial<Record<string, 1 | -1>> = { ArrowDown: 1, ArrowUp: -1 }
 const MODIFIER_KEYS = new Set(['Meta', 'Control', 'Alt', 'Shift'])

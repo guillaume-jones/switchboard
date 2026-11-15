@@ -47,7 +47,9 @@ self.addEventListener('fetch', event => {
 
 self.addEventListener('push', event => {
   const { title, body } = event.data?.json() ?? {}
-  event.waitUntil(self.registration.showNotification(title || 'Switchboard', { body }))
+  event.waitUntil(
+    self.registration.showNotification(title || 'Switchboard', { body, icon: '/icon-192.png', badge: '/badge-96.png' }),
+  )
 })
 
 self.addEventListener('notificationclick', event => {

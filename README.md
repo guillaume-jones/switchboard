@@ -27,7 +27,7 @@ The app can serve a mobile web app over Tailscale, with notifications & offline 
 
 1. Install Tailscale on your desktop and phone, logged into the same account. In the admin console, enable MagicDNS and HTTPS certificates. 
 2. (Linux only) Let the app run `tailscale serve` without root: `sudo tailscale set --operator=$USER`.
-3. Connect Tailscale, add `"remote": 8443` to `~/.switchboard/settings.json`, then restart the app.
+3. Add `"remote": 8443` to `~/.switchboard/settings.json`, then restart the app. 
 4. On the phone, open `https://<desktop>.<tailnet>.ts.net:8443` and add it to the home screen. 
 5. (Mac only) To keep the app online, enable "Prevent automatic sleeping on power adapter when the display is off" in Battery settings.
 

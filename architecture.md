@@ -205,7 +205,7 @@ The shell renders one root card. All layout is cards rendering cards.
 
 ## Other devices
 
-With `remote` set when the app starts, the wrapper serves the shell on a local port and runs `tailscale serve --bg --https=<remote>` to it, so the board opens at `https://<device>.<tailnet>.ts.net:<remote>` on your other devices (installed on a phone as a home-screen web app). Everything still executes on the desktop.
+With `remote` set when the app starts, the wrapper runs `tailscale up` if Tailscale is logged in but stopped, serves the shell on a local port and runs `tailscale serve --bg --https=<remote>` to it, so the board opens at `https://<device>.<tailnet>.ts.net:<remote>` on your other devices (installed on a phone as a home-screen web app). Everything still executes on the desktop.
 
 - **Server** (`app/src-tauri/src/remote.rs`): `GET /*` serves the built shell, `POST /api/<command>` runs the same `call` as IPC with trigger `remote`, and `GET /api/events` is a server-sent event stream per client carrying `rows` (only for that client's subscriptions), `config` and `card`. A client's subscriptions end with its stream.
 - **Access:** a request must carry the `Tailscale-User-Login` of the desktop's own user (set by `tailscale serve`, which strips it from incoming requests), the `ts.net` host, and for `/api/` no cross-site `Origin` or `Sec-Fetch-Site`. The port listens on `127.0.0.1` only. No token: Tailscale is the pairing.

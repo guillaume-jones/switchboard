@@ -76,7 +76,14 @@ fn tailscale(args: &[&str]) -> Result<String, String> {
 }
 
 fn tailnet(port: u16) -> Result<Tailnet, String> {
-    let status: Value = serde_json::from_str(&tailscale(&["status", "--json"])?).map_err(|e| e.to_string())?;
+    let read_status = || -> Result<Value, String> {
+        serde_json::from_str(&tailscale(&["status", "--json"])?).map_err(|e| e.to_string())
+    };
+    let mut status = read_status()?;
+    if status["BackendState"] == "Stopped" {
+        tailscale(&["up"])?;
+        status = read_status()?;
+    }
     let me = &status["Self"];
     let host = me["DNSName"].as_str().unwrap_or_default().trim_end_matches('.').to_string();
     let login = status["User"][me["UserID"].to_string()]["LoginName"].as_str().unwrap_or_default().to_string();

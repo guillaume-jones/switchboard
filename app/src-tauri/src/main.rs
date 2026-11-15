@@ -1,8 +1,10 @@
-use switchboard_core::{Engine, Origin, Settings};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::fs;
 use std::sync::{Mutex, OnceLock, RwLock};
+use std::time::Duration;
+use switchboard_core::{Engine, Origin, Settings, SystemEvent};
+use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
@@ -11,7 +13,8 @@ use tauri_plugin_notification::NotificationExt;
 
 mod push;
 mod remote;
-#[cfg(target_os = "macos")]
+#[cfg_attr(target_os = "macos", path = "system_events/macos.rs")]
+#[cfg_attr(not(target_os = "macos"), path = "system_events/linux.rs")]
 mod system_events;
 
 pub(crate) struct App {
@@ -24,6 +27,8 @@ pub(crate) struct App {
     hotkey: Mutex<String>,
     menu_bar: Mutex<(String, u64)>,
 }
+
+const IDLE_POLL: Duration = Duration::from_secs(15);
 
 pub(crate) type Reply = Result<Value, String>;
 
@@ -172,7 +177,19 @@ impl switchboard_core::Emitter for Forward {
 }
 
 fn main() {
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // A second launch, such as from a desktop shortcut, shows this window instead; macOS does so itself with Reopen.
+    #[cfg(target_os = "linux")]
+    let builder = builder.plugin(
+        tauri_plugin_single_instance::Builder::new()
+            .dbus_id(format!("dev.switchboard.app.home{:x}", {
+                use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+                BuildHasherDefault::<DefaultHasher>::default().hash_one(switchboard_core::home())
+            }))
+            .callback(|app, _, _| forward(app))
+            .build(),
+    );
+    let app = builder
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -208,9 +225,18 @@ fn main() {
             }
         })
         .setup(|app| {
-            TrayIconBuilder::with_id("switchboard")
+            let show = MenuItem::with_id(app, "show", "Show Switchboard", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let tray = TrayIconBuilder::with_id("switchboard")
                 .title("○")
                 .tooltip("Switchboard")
+                .menu(&Menu::with_items(app, &[&show, &quit])?)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, e| match e.id.as_ref() {
+                    "show" => forward(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
                 .on_tray_icon_event(|tray, e| {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left, button_state: MouseButtonState::Up, ..
@@ -218,9 +244,12 @@ fn main() {
                     {
                         forward(tray.app_handle())
                     }
-                })
-                .build(app)?;
-            #[cfg(not(debug_assertions))]
+                });
+            // Linux trays show nothing without an icon; macOS shows the title alone.
+            #[cfg(not(target_os = "macos"))]
+            let tray = tray.icon(app.default_window_icon().cloned().ok_or("no app icon")?);
+            tray.build(app)?;
+            #[cfg(all(target_os = "macos", not(debug_assertions)))]
             if let Ok(exe) = std::env::current_exe()
                 && !std::path::Path::new("/usr/local/bin/swb").exists()
             {
@@ -246,25 +275,35 @@ fn main() {
             }
             menu_bar(&handle);
             hotkey(&handle);
-            #[cfg(target_os = "macos")]
-            {
+            let on_event = {
                 let handle = handle.clone();
-                let settings_handle = handle.clone();
-                system_events::observe(
-                    move |event| {
-                        if let Ok(engine) = &*handle.state::<App>().engine.read().unwrap() {
-                            engine.system_event(event);
-                        }
-                    },
-                    move || settings(&settings_handle).map_or(std::time::Duration::from_secs(120), |s| s.idle_after),
-                );
-            }
+                move |event| {
+                    if let Ok(engine) = &*handle.state::<App>().engine.read().unwrap() {
+                        engine.system_event(event);
+                    }
+                }
+            };
+            system_events::observe(on_event.clone());
+            let idle_handle = handle.clone();
+            std::thread::spawn(move || {
+                let mut was_idle = false;
+                loop {
+                    let idle_after = settings(&idle_handle).map_or(Duration::from_secs(120), |s| s.idle_after);
+                    let is_idle = system_events::idle(idle_after);
+                    if is_idle != was_idle {
+                        on_event(if is_idle { SystemEvent::Idle } else { SystemEvent::Active });
+                        was_idle = is_idle;
+                    }
+                    std::thread::sleep(IDLE_POLL);
+                }
+            });
             let _ = app.notification().on_action(move |_| forward(&handle));
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("cannot start Switchboard");
     app.run(|app, e| match e {
+        #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => forward(app),
         RunEvent::Exit => {
             let engine = std::mem::replace(&mut *app.state::<App>().engine.write().unwrap(), Err("quit".into()));

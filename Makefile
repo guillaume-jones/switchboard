@@ -1,4 +1,5 @@
 TRIPLE := $(shell rustc -vV | sed -n 's/^host: //p')
+OS := $(shell uname -s)
 
 .PHONY: dev build install test bench check fmt sidecar
 
@@ -6,11 +7,19 @@ dev: sidecar | app/node_modules
 	cd app && npx tauri dev
 
 build: sidecar | app/node_modules
-	cd app && npx tauri build
+	cd app && npx tauri build $(if $(filter Linux,$(OS)),--no-bundle)
 
 install: build
+ifeq ($(OS),Darwin)
 	rm -rf /Applications/Switchboard.app
 	cp -R target/release/bundle/macos/Switchboard.app /Applications/
+else
+	install -Dm 755 -t $(HOME)/.local/bin target/release/switchboard target/release/swb
+	install -Dm 644 app/src-tauri/icons/128x128.png $(HOME)/.local/share/icons/hicolor/128x128/apps/switchboard.png
+	mkdir -p $(HOME)/.local/share/applications
+	printf '[Desktop Entry]\nType=Application\nName=Switchboard\nExec=$(HOME)/.local/bin/switchboard\nIcon=switchboard\nCategories=Utility;\n' \
+		> $(HOME)/.local/share/applications/switchboard.desktop
+endif
 
 test: | app/node_modules
 	cargo test

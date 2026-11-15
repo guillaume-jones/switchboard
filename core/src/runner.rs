@@ -39,9 +39,10 @@ pub(crate) struct PayloadWriter {
 /// The environment of a login shell, captured once, so commands see the user's `PATH` even when the app is
 /// started from the Finder.
 pub(crate) fn login_env(shared: &Shared) -> Vec<(String, String)> {
-    let mut zsh = Command::new("/bin/zsh");
-    zsh.args(["-lc", "env -0"]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0);
-    let captured = zsh.spawn().map_err(|e| e.to_string()).and_then(|child| {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let mut login = Command::new(&shell);
+    login.args(["-lc", "env -0"]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0);
+    let captured = login.spawn().map_err(|e| e.to_string()).and_then(|child| {
         let pid = child.id();
         let (done, output) = channel();
         thread::spawn(move || _ = done.send(child.wait_with_output()));
@@ -61,7 +62,7 @@ pub(crate) fn login_env(shared: &Shared) -> Vec<(String, String)> {
             .filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
             .collect(),
         Err(e) => {
-            let message = format!("zsh -lc env {e}; commands run with the app's environment");
+            let message = format!("{shell} -lc env {e}; commands run with the app's environment");
             shared.record(Event::error("runner", "login shell", message));
             std::env::vars().collect()
         }

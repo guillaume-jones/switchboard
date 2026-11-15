@@ -98,14 +98,11 @@ impl Push {
 
 /// Whether the desktop counts as unattended for the `push` setting.
 pub(crate) fn wanted(settings: &Settings) -> bool {
-    #[cfg(target_os = "macos")]
-    let (locked, idle) = (crate::system_events::locked, || crate::system_events::idle(settings.idle_after));
-    #[cfg(not(target_os = "macos"))]
-    let (locked, idle) = (|| false, || false);
+    use crate::system_events::{idle, locked};
     match settings.push.as_str() {
         "always" => true,
         "locked" => locked(),
-        "idle" => locked() || idle(),
+        "idle" => locked() || idle(settings.idle_after),
         _ => false,
     }
 }

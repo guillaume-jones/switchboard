@@ -2,7 +2,7 @@
 //! been quiet for `QUIET` (or, when only `line_contains` rules watch it, at most `MAX_WAIT` after its first change),
 //! `offline` once the network has stayed unreachable for `offline_debounce`.
 
-use super::Message;
+use super::{Event, Message};
 use crate::loader::{FileWatch, Loaded, SystemEvent, Trigger};
 use anyhow::Context;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -38,14 +38,16 @@ enum Input {
 
 pub(super) struct Triggers {
     input: Sender<Input>,
+    tx: Sender<Message>,
     watcher: Mutex<Option<RecommendedWatcher>>,
 }
 
 impl Triggers {
     pub(super) fn new(tx: Sender<Message>) -> Triggers {
         let (input, inputs) = channel();
-        thread::spawn(move || deliver(&inputs, &tx));
-        Triggers { input, watcher: Mutex::default() }
+        let delivered = tx.clone();
+        thread::spawn(move || deliver(&inputs, &delivered));
+        Triggers { input, tx, watcher: Mutex::default() }
     }
 
     /// Replaces the watcher with one for the loaded rules' `when.files`, and returns the roots it cannot watch. Roots
@@ -65,9 +67,13 @@ impl Triggers {
         if files.is_empty() {
             return Vec::new();
         }
-        let (input, patterns) = (self.input.clone(), files.clone());
+        let (input, tx, patterns) = (self.input.clone(), self.tx.clone(), files.clone());
         let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            let Ok(event) = event else { return };
+            let Ok(event) = event.inspect_err(|e| {
+                let _ = tx.send(Message::Event(Event::error("engine", "when.files", e.to_string())));
+            }) else {
+                return;
+            };
             if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
                 for path in event.paths.into_iter().filter(|p| patterns.iter().any(|f| f.matches(p))) {
                     let _ = input.send(Input::Changed(path));

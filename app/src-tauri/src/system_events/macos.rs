@@ -18,7 +18,6 @@ use system_configuration::dynamic_store::{SCDynamicStore, SCDynamicStoreBuilder,
 
 /// Present while the network has a primary service with an address.
 const REACHABILITY_KEYS: [&str; 2] = ["State:/Network/Global/IPv4", "State:/Network/Global/IPv6"];
-const IDLE_POLL: Duration = Duration::from_secs(15);
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
@@ -67,10 +66,7 @@ pub fn idle(after: Duration) -> bool {
 type OnEvent = Box<dyn Fn(SystemEvent) + Send>;
 
 /// Observes for the app's lifetime. Call on the main thread, whose run loop delivers the notifications.
-pub fn observe(
-    on_event: impl Fn(SystemEvent) + Clone + Send + 'static,
-    idle_after: impl Fn() -> Duration + Send + 'static,
-) {
+pub fn observe(on_event: impl Fn(SystemEvent) + Clone + Send + 'static) {
     let workspace = NSWorkspace::sharedWorkspace().notificationCenter();
     let distributed = NSDistributedNotificationCenter::defaultCenter();
     let (locked, unlocked) =
@@ -89,19 +85,7 @@ pub fn observe(
         let observer = unsafe { center.addObserverForName_object_queue_usingBlock(Some(name), None, None, &block) };
         std::mem::forget(observer);
     }
-    let on_idle = on_event.clone();
     thread::spawn(move || watch_reachability(on_event));
-    thread::spawn(move || {
-        let mut was_idle = false;
-        loop {
-            let is_idle = idle(idle_after());
-            if is_idle != was_idle {
-                on_idle(if is_idle { SystemEvent::Idle } else { SystemEvent::Active });
-                was_idle = is_idle;
-            }
-            thread::sleep(IDLE_POLL);
-        }
-    });
 }
 
 fn reachability(store: &SCDynamicStore) -> SystemEvent {

@@ -32,6 +32,8 @@ export const mutate = (name: string, params: Params = {}) => bridge.mutate(name,
 
 export const run = (name: string, args: Params = {}) => bridge.run(name, args).then(r => r.run_id)
 
+export const useCards = () => useLoadedConfig().cards
+
 const FrameContext = createContext<SlotFrame | null>(null)
 
 export function useExpose(vars: Record<string, unknown>) {

@@ -13,6 +13,8 @@ declare module 'switchboard' {
   export function mutate(name: string, params?: Params): Promise<number>
   /** Starts a command (`prs.fix-ci`); resolves to the run id, rejects with an Error. */
   export function run(name: string, args?: Params): Promise<string>
+  /** Names of every card in `cards/`, updated when cards are added or removed. */
+  export function useCards(): string[]
   /** Sets this card's context variables, read by key bindings (`{selected}`). null or undefined means missing. */
   export function useExpose(vars: Record<string, unknown>): void
   /** The only way to render another card. `id` keys per-slot state such as grid geometry; the card receives it as `slot`. */

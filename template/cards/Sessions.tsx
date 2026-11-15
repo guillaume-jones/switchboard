@@ -11,17 +11,13 @@ type Question = {
   multiSelect?: boolean
 }
 
-const ROW: CSSProperties = { padding: '6px 8px', borderBottom: '1px solid var(--border)' }
+const ROW: CSSProperties = { padding: '8px 10px', borderBottom: '1px solid var(--border)' }
 const MUTED: CSSProperties = { color: 'var(--muted)' }
 const MESSAGE: CSSProperties = { margin: '4px 0', maxHeight: 160, overflow: 'auto' }
 const WAITING = ['needs_permission', 'needs_input']
-const ICON_BUTTON: CSSProperties = {
-  border: 'none',
-  background: 'none',
-  padding: '0 2px',
-  cursor: 'pointer',
-  color: 'var(--muted)',
-}
+const TONES: Record<string, string> = { working: 'info', needs_permission: 'accent', needs_input: 'accent' }
+const HEADER: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: '4px 8px', alignItems: 'center' }
+const ACTIONS: CSSProperties = { display: 'flex', gap: 4, alignItems: 'center', marginLeft: 'auto' }
 
 const HOSTS: Record<string, string> = {
   switchboard: 'Switchboard',
@@ -81,7 +77,9 @@ export default function Sessions({ limit = 30, slot }: CardProps<{ limit?: numbe
     <div>
       {error && <div style={{ ...ROW, color: 'var(--bad)' }}>{error}</div>}
       {sessions.length === 0 && (
-        <div style={{ ...ROW, ...MUTED }}>{showHidden ? 'No hidden sessions' : 'No sessions yet'}</div>
+        <div className="empty">
+          {showHidden ? 'No hidden sessions' : 'No sessions yet. Start one from the box below.'}
+        </div>
       )}
       {sessions.map(session => (
         <SessionRow
@@ -103,7 +101,9 @@ export default function Sessions({ limit = 30, slot }: CardProps<{ limit?: numbe
         />
       ))}
       <div style={{ ...ROW, borderBottom: 'none' }}>
-        <button onClick={() => setShowHidden(!showHidden)}>{showHidden ? 'Back to sessions' : 'Show hidden'}</button>
+        <button className="ghost" onClick={() => setShowHidden(!showHidden)}>
+          {showHidden ? '← Back to sessions' : 'Show hidden'}
+        </button>
       </div>
     </div>
   )
@@ -141,43 +141,66 @@ function SessionRow({
 
   return (
     <div style={ROW}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-        <button title={collapsed ? 'Expand' : 'Collapse'} onClick={onCollapse} style={ICON_BUTTON}>
+      <div style={HEADER}>
+        <button
+          title={collapsed ? 'Expand' : 'Collapse'}
+          aria-label={collapsed ? 'Expand' : 'Collapse'}
+          aria-expanded={!collapsed}
+          onClick={onCollapse}
+          className="ghost icon"
+        >
           {collapsed ? '▸' : '▾'}
         </button>
-        <span style={{ fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span
+          onClick={onCollapse}
+          style={{
+            fontWeight: 600,
+            flex: '1 1 140px',
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            cursor: 'pointer',
+          }}
+        >
           {session.title}
         </span>
-        <span style={{ color: WAITING.includes(session.status) ? 'var(--accent)' : 'var(--muted)' }}>
-          {session.status}
+        <span className="badge" data-tone={TONES[session.status]}>
+          {session.status.replace('_', ' ')}
         </span>
-        <span style={MUTED}>{HOSTS[session.host ?? ''] ?? session.host ?? '?'}</span>
-        <span style={MUTED}>{session.updated}</span>
-        <button
-          onClick={() =>
-            grid
-              ? mutate('ui.tile_add', {
-                  grid,
-                  id: `transcript-${session.id}`,
-                  component: 'Transcript',
-                  props: JSON.stringify({ session: session.id }),
-                }).catch(fail)
-              : setTranscript(!transcript)
-          }
-        >
-          {transcript ? 'Hide' : 'Transcript'}
-        </button>
-        <button onClick={() => run('sessions.open', { session: session.id }).catch(fail)}>External</button>
-        <button
-          title={hidden ? 'Unhide' : 'Hide'}
-          onClick={() => mutate(hidden ? 'sessions.unhide' : 'sessions.hide', { id: session.id }).catch(fail)}
-          style={ICON_BUTTON}
-        >
-          {hidden ? '↺' : '×'}
-        </button>
+        <span style={{ ...MUTED, fontSize: 12 }}>
+          {HOSTS[session.host ?? ''] ?? session.host ?? '?'} · {session.updated}
+        </span>
+        <span style={ACTIONS}>
+          <button
+            onClick={() =>
+              grid
+                ? mutate('ui.tile_add', {
+                    grid,
+                    id: `transcript-${session.id}`,
+                    component: 'Transcript',
+                    props: JSON.stringify({ session: session.id }),
+                  }).catch(fail)
+                : setTranscript(!transcript)
+            }
+          >
+            {transcript ? 'Hide' : 'Transcript'}
+          </button>
+          <button onClick={() => run('sessions.open', { session: session.id }).catch(fail)}>External</button>
+          <button
+            title={hidden ? 'Unhide' : 'Hide'}
+            aria-label={hidden ? 'Unhide' : 'Hide'}
+            onClick={() => mutate(hidden ? 'sessions.unhide' : 'sessions.hide', { id: session.id }).catch(fail)}
+            className="ghost icon"
+          >
+            {hidden ? '↺' : '×'}
+          </button>
+        </span>
       </div>
       {!collapsed && prompt && (
-        <div style={{ ...MUTED, margin: '4px 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <div
+          style={{ ...MUTED, margin: '6px 0 4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+        >
           You: {prompt}
         </div>
       )}
@@ -218,7 +241,13 @@ function DecisionPanel({
       onError(e.message),
     )
   const deny = () => answer({ behavior: 'deny', message: 'Denied from Switchboard' })
-  const panel: CSSProperties = { margin: '4px 0', padding: 6, background: 'var(--panel)', borderRadius: 4 }
+  const panel: CSSProperties = {
+    margin: '6px 0',
+    padding: 10,
+    background: 'var(--raised)',
+    borderLeft: '3px solid var(--accent)',
+    borderRadius: 8,
+  }
 
   if (decision.tool_name === 'AskUserQuestion') {
     const questions: Question[] = decision.tool_input.questions ?? []
@@ -239,8 +268,12 @@ function DecisionPanel({
       </div>
       <pre style={{ ...MESSAGE, whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, monospace' }}>{input}</pre>
       <div style={{ display: 'flex', gap: 6 }}>
-        <button onClick={() => answer({ behavior: 'allow' })}>Allow</button>
-        <button onClick={deny}>Deny</button>
+        <button className="primary" onClick={() => answer({ behavior: 'allow' })}>
+          Allow
+        </button>
+        <button className="danger" onClick={deny}>
+          Deny
+        </button>
       </div>
     </div>
   )
@@ -278,7 +311,7 @@ function Questions({
                 key={o.label}
                 title={o.description}
                 onClick={() => toggle(q, o.label)}
-                style={(picked[q.question] ?? []).includes(o.label) ? { borderColor: 'var(--accent)' } : undefined}
+                aria-pressed={(picked[q.question] ?? []).includes(o.label)}
               >
                 {o.label}
               </button>
@@ -287,6 +320,7 @@ function Questions({
         </div>
       ))}
       <button
+        className="primary"
         disabled={!complete}
         onClick={() =>
           onAnswer(Object.fromEntries(questions.map(q => [q.question, (picked[q.question] ?? []).join(', ')])))

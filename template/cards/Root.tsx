@@ -4,8 +4,8 @@ import { THEME, useMobile } from './lib/theme'
 
 const HEALTH: CSSProperties = {
   position: 'fixed',
-  top: 'calc(6px + var(--top-edge, 0px))',
-  right: 8,
+  top: 'calc(8px + var(--top-edge, 0px))',
+  right: 10,
   zIndex: 5,
 }
 /** Opaque, so iOS extends its colour into the status bar instead of blurring the content below it. */
@@ -18,8 +18,8 @@ const TOP_EDGE: CSSProperties = {
 }
 const FOOTER: CSSProperties = {
   display: 'flex',
-  padding: '6px 8px',
-  borderTop: '1px solid var(--border)',
+  padding: '8px 10px',
+  background: 'var(--panel)',
 }
 
 /** Boards, with Health floating over them and the session box as a footer; boards become a list on phones. */
@@ -32,7 +32,7 @@ export default function Root() {
       <style>{THEME}</style>
       <div style={TOP_EDGE} />
       <div className="chip" style={HEALTH}>
-        <CardSlot component="Health" id="health" size="compact" />
+        <CardSlot component="Health" id="health" />
       </div>
       <main style={{ flex: 1, overflow: 'auto' }}>
         <CardSlot component="Boards" id="boards" props={boards} />

@@ -18,15 +18,18 @@ export default function Workstreams() {
   }, [members])
 
   return (
-    <div style={{ padding: 8 }}>
-      {streams.length === 0 && <div style={{ color: 'var(--muted)' }}>No workstreams yet</div>}
+    <div style={{ padding: '8px 10px' }}>
+      {streams.length === 0 && <div className="empty">No workstreams yet</div>}
       {streams.map(stream => (
-        <div key={stream.id} style={{ marginBottom: 8 }}>
-          <div style={{ fontWeight: 600 }}>
-            {stream.title} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>{stream.state}</span>
+        <div key={stream.id} style={{ marginBottom: 12 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 600, marginBottom: 4 }}>
+            <span style={{ flex: 1, minWidth: 0 }}>{stream.title}</span>
+            <span className="badge" data-tone={stream.state === 'active' ? 'good' : undefined}>
+              {stream.state}
+            </span>
           </div>
           {membersByStream.get(stream.id)?.map(member => (
-            <div key={member.ref} style={{ paddingLeft: 12 }}>
+            <div key={member.ref} style={{ padding: '3px 0 3px 10px', borderLeft: '2px solid var(--border)' }}>
               <Item ref={member.ref} />
             </div>
           ))}

@@ -114,6 +114,7 @@ useQuery("prs.search", { text })     // query
 mutate("prs.dismiss", { ref })       // resolves to changed row count
 run("prs.fix-ci", { pr })            // resolves to run id
 useExpose({ selected: "prs:4812" })  // context variables for key bindings
+useCards()                           // names of every card, e.g. for a picker
 <CardSlot component="PRList" props={{}} size="compact" id="prs" />
 <Item ref="prs:4812" size="compact" />
 ```
@@ -122,7 +123,7 @@ On another device without a connection to the desktop, `useQuery` returns the la
 
 A subscription re-runs after every write to a table it reads and sends its whole result when it changes, so never mount a view over a growing table (`core_events`, `core_runs`, `core_firings`, your own logs) unless the filter keeps the result small (`kind: "error"`, one `run_id`). A filter that still matches a growing set, like `kind: "write"`, is as slow as none: use a query with a limit.
 
-Cards receive `size` and `slot` (the slot `id`). Per-slot UI state goes in `localStorage` keyed by `slot`; navigation and layout live in the `ui` source, with the current board per client (`desktop` or `mobile`, passed down from `Root`). Shared styles live in `cards/lib/theme.ts`: `THEME` (the variables `--bg --fg --muted --border --panel --accent --bad`, element defaults and classes such as `.chip`), which `Root.tsx` injects once. Add shared styles there rather than per card.
+Cards receive `size` and `slot` (the slot `id`). Per-slot UI state goes in `localStorage` keyed by `slot`; navigation and layout live in the `ui` source, with the current board per client (`desktop` or `mobile`, passed down from `Root`). Shared styles live in `cards/lib/theme.ts`: `THEME` (the variables `--bg --panel --raised --fg --muted --border --accent --on-accent --info --bad --good --shadow --radius`, element defaults, button variants `.primary`, `.ghost`, `.icon`, `.danger`, `aria-pressed`/`aria-current` for selected buttons, and classes `.chip`, `.badge[data-tone=accent|info|good|bad]`, `.heading`, `.empty`, `.tile`, `.tile-bar`), which `Root.tsx` injects once. Add shared styles there rather than per card; touch screens get larger controls from it.
 
 ## Mobile
 
@@ -137,7 +138,7 @@ The same cards run on a phone, served by the desktop (see `remote`). `Root` sets
 
 ```json
 { "key": "f", "context": "card:PRList && selected", "command": "prs.fix-ci", "args": { "pr": "{selected}" } }
-{ "key": "cmd-]", "context": "card:Boards", "write": "ui.next_board", "args": { "client": "{client}" } }
+{ "key": "ctrl-tab", "context": "card:Boards", "write": "ui.next_board", "args": { "client": "{client}" } }
 ```
 
 Exactly one of `command` (source, built-in, or shell: `palette.open`, `card.focus_next`, `card.focus_prev`, `keymap.context`) or `write`; `null` unbinds. Context: `card:<Name>`, variable names, `&&`, `||`, `!`, `>` (descendant), parentheses. Innermost match wins. `{var}` is the nearest card's, `{Card.var}` explicit; a missing variable disables the binding. `keymap.context` (cmd-shift-k) shows the stack and which binding a key hits.
@@ -164,4 +165,4 @@ swb run finish <run_id> --ok|--fail [summary]
 
 ## Existing sources and cards
 
-Read `sources/` and `cards/` before adding anything; extend what is there. To show a card on the main board: `swb write ui.tile_add grid=main id=<id> component=<Card> 'props="{}"'`.
+Read `sources/` and `cards/` before adding anything; extend what is there. To show a card on the main board: `swb write ui.tile_add grid=main id=<id> component=<Card> 'props="{}"'`. The default layout is the `ui_defaults` view; `ui.reset {grid}` replaces a grid's tiles with it.

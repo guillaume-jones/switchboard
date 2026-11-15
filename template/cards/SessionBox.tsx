@@ -9,7 +9,7 @@ const STATUS: CSSProperties = {
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
-  maxWidth: 360,
+  maxWidth: '100%',
 }
 
 /** Starts a Switchboard-owned Claude session: `sessions.edit` on this folder, or `sessions.headless` in another one. */
@@ -55,10 +55,12 @@ export default function SessionBox({ slot }: CardProps) {
       <input
         value={cwd}
         onChange={e => setCwd(e.target.value)}
-        placeholder="in this app, or a folder"
-        style={{ flex: '0 1 180px', minWidth: 0 }}
+        placeholder="Folder (default: this app)"
+        style={{ flex: '0 1 200px', minWidth: 0 }}
       />
-      <button type="submit">Start</button>
+      <button type="submit" className="primary" disabled={!prompt.trim()}>
+        Start session
+      </button>
       {error ? <span style={{ color: 'var(--bad)' }}>{error}</span> : runId && <Status runId={runId} />}
     </form>
   )

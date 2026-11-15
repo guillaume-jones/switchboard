@@ -9,3 +9,9 @@ CREATE TABLE items (
   woken_at INTEGER
 );
 CREATE UNIQUE INDEX items_open ON items (ref) WHERE cleared_at IS NULL;
+
+-- Core error events up to and including `through` (a `core_events` id) are hidden from Health.
+CREATE TABLE errors_cleared (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  through INTEGER NOT NULL
+);

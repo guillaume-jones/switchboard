@@ -9,12 +9,13 @@ const IMPLICIT_MAIN: Board = { id: 'main', title: 'Main', component: 'Grid', pro
 /** Leaves room on the right for the Health chip `Root` floats there. */
 const NAV: CSSProperties = {
   display: 'flex',
+  alignItems: 'center',
   gap: 4,
-  padding: '4px 72px 4px 8px',
+  padding: '8px 88px 4px 10px',
   overflowX: 'auto',
   whiteSpace: 'nowrap',
+  scrollbarWidth: 'none',
 }
-const CURRENT_TAB: CSSProperties = { borderColor: 'var(--accent)', color: 'var(--accent)' }
 
 /**
  * Tabs over the boards. Each `client` (`desktop`, `mobile`) has its own current board; on `mobile` the board gets
@@ -31,13 +32,14 @@ export default function Boards({ client }: CardProps<{ client: string }>) {
   )
 
   return (
-    <div>
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
       <nav style={NAV}>
         {boards.map(board => (
           <button
             key={board.id}
+            className="ghost"
+            aria-current={board === current ? 'page' : undefined}
             onClick={() => mutate('ui.set_board', { client, id: board.id })}
-            style={board === current ? CURRENT_TAB : undefined}
           >
             {board.title}
           </button>

@@ -59,13 +59,12 @@ const db = {
   boards: [
     { id: 'main', title: 'Main', component: 'Grid', props: '{"grid":"main"}' },
     { id: 'prs', title: 'PRs', component: 'PRList', props: '{}' },
-    { id: 'health', title: 'Health', component: 'Health', props: '{}' },
     { id: 'workstreams', title: 'Workstreams', component: 'Workstreams', props: '{}' },
   ],
   currentBoard: 'main',
   tiles: [
     { grid: 'main', id: 'prs', component: 'PRList', props: '{}', x: 0, y: 0, w: 7, h: 6 },
-    { grid: 'main', id: 'health', component: 'Health', props: '{}', x: 7, y: 0, w: 5, h: 8 },
+    { grid: 'main', id: 'workstreams', component: 'Workstreams', props: '{}', x: 7, y: 0, w: 5, h: 8 },
   ] as Tile[],
   sessions: [
     { id: 'a1b2', title: 'Refactor sync worker', status: 'needs_input', run_id: null, cwd: '~/src/sync' },
@@ -94,6 +93,11 @@ const db = {
 }
 
 const hiddenSessions = new Set<string>()
+let errorsClearedThrough = 0
+const defaultTiles: Tile[] = [
+  { grid: 'main', id: 'sessions', component: 'Sessions', props: '{}', x: 0, y: 0, w: 8, h: 18 },
+  { grid: 'main', id: 'workstreams', component: 'Workstreams', props: '{}', x: 8, y: 0, w: 4, h: 18 },
+]
 
 const VIEWS: Record<string, () => Row[]> = {
   prs_items: () => db.prs.filter(pr => !pr.dismissed).map(({ id, title, ci }) => ({ id, title, ci })),
@@ -103,6 +107,8 @@ const VIEWS: Record<string, () => Row[]> = {
   attention_open: () => db.attention,
   core_runs: () => db.runs,
   core_rules: () => db.rules,
+  ui_defaults: () => defaultTiles,
+  attention_errors_cleared: () => [{ through: errorsClearedThrough }],
 }
 
 const QUERIES: Record<string, (params: Args) => Row[]> = {
@@ -149,11 +155,20 @@ const WRITERS: Record<string, (params: Args) => void> = {
     const y = Math.max(0, ...db.tiles.filter(tile => tile.grid === grid).map(tile => tile.y + tile.h))
     db.tiles.push({ grid, id, component, props, x: 0, y, w: 6, h: 6 })
   },
+  'ui.reset': ({ grid }) => {
+    db.tiles = [
+      ...db.tiles.filter(tile => tile.grid !== grid),
+      ...defaultTiles.filter(tile => tile.grid === grid).map(tile => ({ ...tile })),
+    ]
+  },
   'ui.tile_remove': ({ grid, id }) => {
     db.tiles = db.tiles.filter(tile => tile !== findTile(grid, id))
   },
   'attention.clear': ({ ref }) => {
     db.attention = db.attention.filter(item => item.ref !== ref)
+  },
+  'attention.clear_errors': ({ through }) => {
+    errorsClearedThrough = Math.max(errorsClearedThrough, Number(through))
   },
   'core.rule_enable': ({ rule }) => {
     for (const r of db.rules) if (r.rule === rule) Object.assign(r, { enabled: 1, disabled_reason: null })
@@ -203,12 +218,12 @@ function startRun(command: string, args: Args) {
 }
 
 const KEYMAP: Binding[] = [
-  { key: 'cmd-k', command: 'palette.open' },
+  { key: 'cmd-shift-p', command: 'palette.open' },
   { key: 'cmd-shift-k', command: 'keymap.context' },
   { key: 'alt-j', command: 'card.focus_next' },
   { key: 'alt-k', command: 'card.focus_prev' },
-  { key: 'cmd-]', context: 'card:Boards', write: 'ui.next_board' },
-  { key: 'cmd-[', context: 'card:Boards', write: 'ui.prev_board' },
+  { key: 'ctrl-tab', context: 'card:Boards', write: 'ui.next_board' },
+  { key: 'ctrl-shift-tab', context: 'card:Boards', write: 'ui.prev_board' },
   { key: 'x', context: 'card:Boards', write: 'ui.next_board' },
   { key: 'x', context: 'card:Health', write: null },
   { key: 'f', context: 'card:PRList && selected', command: 'prs.fix-ci', args: { pr: '{selected}' } },

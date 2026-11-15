@@ -80,7 +80,7 @@ export function Composer({
         </div>
       )}
       <form
-        style={{ display: 'flex', gap: 6, marginTop: 4 }}
+        style={{ display: 'flex', gap: 6, marginTop: 6 }}
         onSubmit={e => {
           e.preventDefault()
           send()
@@ -97,9 +97,11 @@ export function Composer({
             }
           }}
           placeholder={session.owned ? 'Follow up' : 'Message this session'}
-          style={{ flex: 1 }}
+          style={{ flex: 1, minWidth: 0 }}
         />
-        <button type="submit">Send</button>
+        <button type="submit" className="primary" disabled={!text.trim()}>
+          Send
+        </button>
       </form>
     </div>
   )

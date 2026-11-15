@@ -196,6 +196,7 @@ fn sessions_keep_the_last_message_and_pending_decisions() {
     assert_eq!(session["owned"], 1);
     let session = hook(json!({"hook_event_name": "UserPromptSubmit", "prompt": "again"}), Some("run2"));
     assert_eq!((session["last_message"].as_str(), session["run_id"].as_str()), (Some("Found it."), Some("run2")));
+    assert_eq!((session["title"].as_str(), session["last_prompt"].as_str()), (Some("investigate"), Some("again")));
 
     let request = json!({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "ls"}});
     let session = hook(request, None);
@@ -212,6 +213,12 @@ fn sessions_keep_the_last_message_and_pending_decisions() {
     assert_eq!(session["answer"], r#"{"behavior":"allow"}"#);
     let session = hook(json!({"hook_event_name": "PostToolUse", "tool_name": "Bash"}), None);
     assert_eq!((session["status"].as_str(), session["decision"].is_null(), session["answer"].is_null()), (Some("working"), true, true));
+    let recent = |hidden: i64| engine.query("sessions.recent", json!({"limit": 10, "hidden": hidden})).unwrap().as_array().unwrap().len();
+    assert_eq!((recent(0), recent(1)), (1, 0));
+    engine.write("sessions.hide", json!({"id": "s1"}), card()).unwrap();
+    assert_eq!((recent(0), recent(1)), (0, 1));
+    engine.write("sessions.unhide", json!({"id": "s1"}), card()).unwrap();
+    assert_eq!((recent(0), recent(1)), (1, 0));
 }
 
 #[test]

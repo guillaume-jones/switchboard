@@ -23,6 +23,12 @@ export default function SessionBox({ slot }: CardProps) {
   return (
     <form
       style={{ display: 'flex', gap: 8, alignItems: 'center', flex: 1 }}
+      onKeyDown={e => {
+        if (e.key === 'Enter' && e.metaKey) {
+          e.preventDefault()
+          e.currentTarget.requestSubmit()
+        }
+      }}
       onSubmit={e => {
         e.preventDefault()
         if (!prompt.trim()) return
@@ -52,6 +58,7 @@ export default function SessionBox({ slot }: CardProps) {
         placeholder="in this app, or a folder"
         style={{ width: 180 }}
       />
+      <button type="submit">Start</button>
       {error ? <span style={{ color: 'var(--bad)' }}>{error}</span> : runId && <Status runId={runId} />}
     </form>
   )

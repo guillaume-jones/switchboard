@@ -30,13 +30,17 @@ const TITLE_BAR: CSSProperties = {
   cursor: 'move',
 }
 const REMOVE_BUTTON: CSSProperties = { border: 'none', background: 'none', padding: 0, cursor: 'pointer' }
+/** A corner grip drawn inside the tile's bottom-right corner, with a larger hit area than it looks. */
 const RESIZE_HANDLE: CSSProperties = {
   position: 'absolute',
   right: 2,
   bottom: 2,
-  width: 10,
-  height: 10,
+  width: 16,
+  height: 16,
   cursor: 'nwse-resize',
+  background:
+    'linear-gradient(135deg, transparent 55%, var(--muted) 55%, var(--muted) 62%, transparent 62%, transparent 75%, var(--muted) 75%, var(--muted) 82%, transparent 82%)',
+  opacity: 0.7,
 }
 
 export default function Grid({ grid }: CardProps<{ grid: string }>) {
@@ -97,8 +101,8 @@ export default function Grid({ grid }: CardProps<{ grid: string }>) {
   const height = Math.max(MIN_ROWS, ...boxes.map(box => box.y + box.h)) * ROW_HEIGHT
 
   return (
-    <div style={{ padding: 8 }}>
-      <div ref={container} style={{ position: 'relative', height }}>
+    <div style={{ padding: 8, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div ref={container} style={{ position: 'relative', flex: 1, minHeight: height }}>
         {boxes.map(box => (
           <div
             key={box.id}

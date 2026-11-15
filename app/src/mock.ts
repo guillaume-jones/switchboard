@@ -93,6 +93,8 @@ const db = {
   members: [{ stream_id: 'login', ref: 'prs:4812', component: null, props: null, added_by: 'mock', added_at: now() }],
 }
 
+const hiddenSessions = new Set<string>()
+
 const VIEWS: Record<string, () => Row[]> = {
   prs_items: () => db.prs.filter(pr => !pr.dismissed).map(({ id, title, ci }) => ({ id, title, ci })),
   sessions_items: () => db.sessions,
@@ -107,7 +109,11 @@ const QUERIES: Record<string, (params: Args) => Row[]> = {
   'prs.search': ({ text }) =>
     VIEWS.prs_items().filter(pr => pr.title.toLowerCase().includes(String(text).toLowerCase())),
   'sessions.transcript': () => [],
-  'sessions.recent': ({ limit }) => [...db.sessions].reverse().slice(0, Number(limit)),
+  'sessions.recent': ({ limit, hidden }) =>
+    [...db.sessions]
+      .reverse()
+      .filter(session => hiddenSessions.has(session.id) === Boolean(Number(hidden)))
+      .slice(0, Number(limit)),
   'ui.boards': () => db.boards.map(board => ({ ...board, current: board.id === db.currentBoard ? 1 : 0 })),
   'core.events': ({ kind, limit }) =>
     db.events
@@ -125,6 +131,8 @@ const findTile = (grid: string, id: string) => db.tiles.find(tile => tile.grid =
 
 const WRITERS: Record<string, (params: Args) => void> = {
   'sessions.transcript_close': () => {},
+  'sessions.hide': ({ id }) => void hiddenSessions.add(String(id)),
+  'sessions.unhide': ({ id }) => void hiddenSessions.delete(String(id)),
   'prs.dismiss': ({ ref }) => {
     for (const pr of db.prs) if (`prs:${pr.id}` === ref) pr.dismissed = true
   },

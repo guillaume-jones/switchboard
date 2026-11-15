@@ -1,4 +1,4 @@
-INSERT INTO sessions.items (id, agent, title, status, cwd, run_id, raw, created_at, updated_at, host, entrypoint, last_message, decision)
+INSERT INTO sessions.items (id, agent, title, status, cwd, run_id, raw, created_at, updated_at, host, entrypoint, last_message, last_prompt, decision)
 VALUES (
   :payload ->> '$.session_id',
   'claude',
@@ -12,6 +12,7 @@ VALUES (
   nullif(:host, ''),
   nullif(:entrypoint, ''),
   iif(:payload ->> '$.hook_event_name' = 'Stop', :payload ->> '$.last_assistant_message', NULL),
+  iif(:payload ->> '$.hook_event_name' = 'UserPromptSubmit', :payload ->> '$.prompt', NULL),
   iif(:payload ->> '$.hook_event_name' = 'PermissionRequest', json_object(
     'tool_name', :payload ->> '$.tool_name',
     'tool_input', json(:payload -> '$.tool_input'),
@@ -27,6 +28,7 @@ ON CONFLICT (id) DO UPDATE SET
   host = coalesce(host, excluded.host),
   entrypoint = coalesce(entrypoint, excluded.entrypoint),
   last_message = coalesce(excluded.last_message, last_message),
+  last_prompt = coalesce(excluded.last_prompt, last_prompt),
   decision = coalesce(excluded.decision, decision),
   answer = iif(excluded.decision IS NULL, answer, NULL);
 

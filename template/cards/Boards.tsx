@@ -17,7 +17,7 @@ export default function Boards() {
   const props = useMemo(() => JSON.parse(current?.props || '{}'), [current?.props])
 
   return (
-    <div>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <nav style={NAV}>
         {boards.map(board => (
           <button

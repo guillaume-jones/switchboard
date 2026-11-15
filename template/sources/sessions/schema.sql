@@ -11,6 +11,7 @@ CREATE TABLE items (
   host TEXT,
   entrypoint TEXT,
   last_message TEXT,
+  last_prompt TEXT,
   decision TEXT,
   answer TEXT
 );
@@ -30,3 +31,8 @@ CREATE TABLE messages (
   text TEXT NOT NULL
 );
 CREATE INDEX messages_session ON messages (session, at);
+
+CREATE TABLE hidden (
+  session TEXT PRIMARY KEY NOT NULL,
+  hidden_at INTEGER NOT NULL
+);

@@ -4,7 +4,7 @@
 
 use super::{Event, Message};
 use crate::loader::{FileWatch, Loaded, SystemEvent, Trigger};
-use anyhow::Context;
+use anyhow::anyhow;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
@@ -20,6 +20,14 @@ const QUIET: Duration = Duration::from_millis(200);
 const MAX_WAIT: Duration = Duration::from_secs(1);
 /// More appended at once is skipped rather than read, such as a file that was replaced.
 const MAX_APPENDED: u64 = 64 << 20;
+
+/// notify's error, with the fix when it is Linux's inotify watch limit.
+pub(super) fn watch_error(e: &notify::Error) -> String {
+    match e.kind {
+        notify::ErrorKind::MaxFilesWatch => format!("{e} Raise the fs.inotify.max_user_watches sysctl."),
+        _ => e.to_string(),
+    }
+}
 
 pub(crate) enum Occurrence {
     /// `lines` holds the appended lines, with their offsets, that some rule's `line_contains` matches.
@@ -70,7 +78,7 @@ impl Triggers {
         let (input, tx, patterns) = (self.input.clone(), self.tx.clone(), files.clone());
         let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
             let Ok(event) = event.inspect_err(|e| {
-                let _ = tx.send(Message::Event(Event::error("engine", "when.files", e.to_string())));
+                let _ = tx.send(Message::Event(Event::error("engine", "when.files", watch_error(e))));
             }) else {
                 return;
             };
@@ -90,7 +98,7 @@ impl Triggers {
             .filter_map(|root| {
                 watcher
                     .watch(root, RecursiveMode::Recursive)
-                    .with_context(|| format!("cannot watch {}", root.display()))
+                    .map_err(|e| anyhow!("cannot watch {}: {}", root.display(), watch_error(&e)))
                     .err()
             })
             .collect();

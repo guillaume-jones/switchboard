@@ -365,7 +365,7 @@ impl Engine {
                 let _ = changed.send(());
             }
         })?;
-        watcher.watch(&home, RecursiveMode::Recursive)?;
+        watcher.watch(&home, RecursiveMode::Recursive).map_err(|e| anyhow!(triggers::watch_error(&e)))?;
 
         let (tx, rx) = channel();
         let (refresh_queue, queued_refreshes) = channel();

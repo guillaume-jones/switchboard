@@ -87,7 +87,7 @@ Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started i
 | Key | Default | |
 | --- | --- | --- |
 | `root` | `"Root"` | root card |
-| `terminal` | `"Terminal"` | app `sessions.launch` and `sessions.open` open (e.g. `"Ghostty"`) |
+| `terminal` | `"Terminal"` | app `sessions.launch` and `sessions.open` open (e.g. `"Ghostty"`); on Linux a command taking `-e` (e.g. `"ghostty"`), and `"Terminal"` picks the first installed of `x-terminal-emulator`, `gnome-terminal`, `konsole` and `xterm` |
 | `hotkey` | `"cmd-shift-space"` | global bring-forward key; `""` disables |
 | `menu_bar` | `""` | view whose row count shows in the menu bar |
 | `max_per_hour` / `max_depth` / `max_concurrency` | `20` / `5` / `4` | rule limits |

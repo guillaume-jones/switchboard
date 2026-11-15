@@ -25,6 +25,10 @@ const HOSTS: Record<string, string> = {
   'com.mitchellh.ghostty': 'Ghostty',
   'com.apple.Terminal': 'Terminal',
   'com.googlecode.iterm2': 'iTerm',
+  ghostty: 'Ghostty',
+  zed: 'Zed',
+  vscode: 'VS Code',
+  WezTerm: 'WezTerm',
 }
 
 /**

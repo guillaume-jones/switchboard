@@ -2,7 +2,7 @@
 # sessions.launch {prompt?, cwd?, session?}: opens an interactive Claude Code session in the terminal named in
 # settings.json, resuming session if given. The run succeeds once the terminal opens; the session is tracked by hooks.
 cwd=${SWB_ARG_CWD:-$HOME}
-terminal=$(plutil -extract terminal raw -o - "$SWITCHBOARD_HOME/settings.json" 2>/dev/null) || terminal=Terminal
+terminal=$(jq -er .terminal "$SWITCHBOARD_HOME/settings.json" 2>/dev/null) || terminal=Terminal
 script=$SWITCHBOARD_HOME/data/launch/$RUN_ID.command
 mkdir -p ${script:h}
 cat > $script <<SCRIPT
@@ -12,5 +12,13 @@ export RUN_ID=${(q)RUN_ID} SWITCHBOARD_HOME=${(q)SWITCHBOARD_HOME} SWB=${(q)SWB}
 exec claude --settings ${(q)SOURCE_DIR}/files/claude-hooks.json ${SWB_ARG_SESSION:+--resume ${(q)SWB_ARG_SESSION}} ${SWB_ARG_PROMPT:+${(q)SWB_ARG_PROMPT}}
 SCRIPT
 chmod +x $script
-open -a $terminal $script || exit 1
+if [[ $OSTYPE == darwin* ]]; then
+  open -a $terminal $script || exit 1
+else
+  if [[ $terminal == Terminal ]]; then
+    for terminal in x-terminal-emulator gnome-terminal konsole xterm; do (( $+commands[$terminal] )) && break; done
+  fi
+  (( $+commands[$terminal] )) || { print -r -- "{\"outcome\": \"failure\", \"summary\": \"no terminal $terminal\"}"; exit 1 }
+  setsid -f $terminal -e $script >/dev/null 2>&1
+fi
 print -r -- "{\"outcome\": \"success\", \"summary\": \"launched in $terminal\"}"

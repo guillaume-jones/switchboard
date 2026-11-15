@@ -29,6 +29,7 @@ fmt: | app/node_modules
 
 check: sidecar | app/node_modules
 	cargo clippy --workspace --all-targets -- -D warnings
+	cargo test --release -p switchboard-cli --test cli swb_loads_no_frameworks
 	cd app && npx tsc -p . && npx tsc -p tsconfig.cards.json
 	app/node_modules/.bin/oxfmt --check app template/cards
 

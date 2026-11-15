@@ -6,7 +6,10 @@ path_=$(print -l ~/.claude/projects/*/$SWB_ARG_SESSION.jsonl(N) | head -1)
 "$SWB" write sessions.transcript_open session=$SWB_ARG_SESSION || exit 1
 jq -cs 'map(select(.type == "user" or .type == "assistant")
   | .message.content |= (if type == "array" then map(
-      if .type == "tool_result" then .content |= (tostring | .[0:300])
+      if .type == "tool_result" then .content |= ((if type == "array" then map(
+          if .type == "text" then .text elif .type == "image" then "[image]" else empty end) | join(" ")
+        else tostring end) | .[0:300])
+      elif .type == "image" then {type}
       elif .type == "tool_use" then .input |= (tostring | .[0:300])
       elif .type == "thinking" then empty
       else . end) else . end))' $path_ | "$SWB" write sessions.transcript_add || exit 1

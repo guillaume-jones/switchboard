@@ -190,3 +190,15 @@ fn a_connection_dropped_before_the_reply_spools_the_write() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+#[test]
+#[cfg(target_os = "macos")]
+#[cfg_attr(debug_assertions, ignore = "only release builds use LTO; run with cargo test --release")]
+fn swb_loads_no_frameworks() {
+    let out = Command::new("otool").arg("-L").arg(env!("CARGO_BIN_EXE_swb")).output().unwrap();
+    let libraries = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !libraries.contains(".framework"),
+        "swb links a framework, adding ~1 ms to every hook: its code reaches into the engine\n{libraries}"
+    );
+}

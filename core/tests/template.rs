@@ -237,14 +237,15 @@ fn transcripts_keep_messages_of_open_sessions_only() {
         first,
         line("2", "s1", "assistant", json!([{"type": "thinking", "thinking": "hm"}, {"type": "text", "text": "Hi"}, {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}])),
         line("3", "s2", "user", json!("other session")),
+        line("5", "s1", "user", json!([{"type": "image", "source": {"type": "base64", "data": "iVBOR"}}, {"type": "tool_result", "content": [{"type": "text", "text": "shot"}, {"type": "image", "source": {"type": "base64", "data": "iVBOR"}}]}])),
         sidechain,
         {"type": "queue-operation", "sessionId": "s1"},
     ]);
-    assert_eq!(add(lines.clone()), 2);
+    assert_eq!(add(lines.clone()), 3);
     assert_eq!(add(lines), 0, "lines already kept are ignored");
     let messages = engine.query("sessions.transcript", json!({"session": "s1", "limit": 10})).unwrap();
     let texts: Vec<&str> = messages.as_array().unwrap().iter().map(|m| m["text"].as_str().unwrap()).collect();
-    assert_eq!(texts, ["hello", "Hi\n\n→ Bash {\"command\":\"ls\"}"]);
+    assert_eq!(texts, ["hello", "Hi\n\n→ Bash {\"command\":\"ls\"}", "[image]\n\n← shot [image]"]);
     engine.write("sessions.transcript_close", json!({"session": "s1"}), card()).unwrap();
     assert_eq!(engine.query("sessions.transcript", json!({"session": "s1", "limit": 10})).unwrap(), json!([]));
 }

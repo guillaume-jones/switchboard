@@ -6,7 +6,15 @@ SELECT m.value ->> '$.uuid', m.value ->> '$.sessionId', m.value ->> '$.timestamp
       SELECT group_concat(CASE c.value ->> '$.type'
         WHEN 'text' THEN c.value ->> '$.text'
         WHEN 'tool_use' THEN '→ ' || (c.value ->> '$.name') || ' ' || substr(c.value ->> '$.input', 1, 300)
-        WHEN 'tool_result' THEN '← ' || substr(coalesce(c.value ->> '$.content', ''), 1, 300)
+        WHEN 'image' THEN '[image]'
+        WHEN 'tool_result' THEN '← ' || substr(
+          CASE json_type(c.value, '$.content')
+            WHEN 'array' THEN (
+              SELECT group_concat(CASE t.value ->> '$.type' WHEN 'text' THEN t.value ->> '$.text' WHEN 'image' THEN '[image]' END, ' ')
+              FROM json_each(c.value, '$.content') AS t
+            )
+            ELSE coalesce(c.value ->> '$.content', '')
+          END, 1, 300)
       END, char(10) || char(10))
       FROM json_each(m.value, '$.message.content') AS c
     )

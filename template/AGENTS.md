@@ -59,7 +59,7 @@ Conventions: primary key on every table; provider JSON kept in `raw` and exposed
 | `when.view` | evaluated on load and whenever its result changes; fires once per new rendered `key`, ever |
 | `when.schedule` | 5-field local cron. With a view, re-evaluates it; alone, fires once per slot (after sleep, only the latest missed slot; a new rule waits for its next slot) |
 | `when.files` | absolute or `~/` glob (`*` stays within one directory, `**` crosses them). Fires once a matching file changed and stayed quiet for 200 ms; gives `{path}`. A missing base directory is skipped until the next reload |
-| `when.line_contains` | with `when.files`: fires once per complete line appended to a matching file that contains this text, instead of per change; gives `{path}` and `{line}`. Lines present when the rule loads never fire |
+| `when.line_contains` | with `when.files`: fires once per complete line appended to a matching file that contains this text, instead of per change, at most 1 s after the file starts changing even if it never goes quiet; gives `{path}` and `{line}`. Lines present when the rule loads never fire |
 | `when.system` | `sleep`, `wake`, `lock`, `unlock`, `online`, `offline`, `idle` or `active`; gives `{event}`. `offline` fires after the network stays unreachable for `offline_debounce`, `online` only after an `offline`. `idle` fires after `idle_after` without input while no app keeps the display awake (video counts as attended, audio does not), `active` on the next input |
 | (triggers) | at most one of `schedule`, `files`, `system`. With a view, an occurrence re-evaluates it; alone, the rule fires once per occurrence |
 | `key` | required with `when.view`, forbidden without; `{col}` templates over the view's columns, else over the trigger's variables |
@@ -94,7 +94,7 @@ Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started i
 | `timeout` | `600` | command timeout |
 | `open_run_expiry` | `86400` | |
 | `offline_debounce` | `3` | how long the network must stay unreachable before `when.system: offline` fires |
-| `snapshot_interval` / `snapshot_retention` | `3600` / `604800` | |
+| `snapshot_interval` / `snapshot_retention` | `3600` / `172800` | |
 | `retention` | `2592000` | events and finished runs |
 | `depth_cap` | `20` | card nesting |
 | `remote` | none | HTTPS port that `tailscale serve` exposes the board on to your other devices; none keeps it local |

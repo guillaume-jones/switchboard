@@ -28,6 +28,7 @@ CREATE TABLE firings (
 );
 CREATE INDEX firings_rule_at ON firings (rule, at);
 CREATE INDEX firings_at ON firings (at);
+CREATE INDEX firings_blocked ON firings (id) WHERE blocked IS NOT NULL;
 
 CREATE TABLE rules (
   rule TEXT PRIMARY KEY,

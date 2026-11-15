@@ -1,5 +1,6 @@
 //! Turns file changes and system events into trigger occurrences for the writer thread: a changed file once it has
-//! been quiet for `QUIET`, `offline` once the network has stayed unreachable for `offline_debounce`.
+//! been quiet for `QUIET` (or, when only `line_contains` rules watch it, at most `MAX_WAIT` after its first change),
+//! `offline` once the network has stayed unreachable for `offline_debounce`.
 
 use super::Message;
 use crate::loader::{FileWatch, Loaded, SystemEvent, Trigger};
@@ -15,8 +16,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const QUIET: Duration = Duration::from_millis(200);
+/// Complete lines can be read while the file is still being written, so a file appended to continuously still fires.
+const MAX_WAIT: Duration = Duration::from_secs(1);
 /// More appended at once is skipped rather than read, such as a file that was replaced.
-const MAX_APPENDED: u64 = 8 << 20;
+const MAX_APPENDED: u64 = 64 << 20;
 
 pub(crate) enum Occurrence {
     /// `lines` holds the appended lines, with their offsets, that some rule's `line_contains` matches.
@@ -98,11 +101,12 @@ impl Triggers {
 fn deliver(inputs: &Receiver<Input>, tx: &Sender<Message>) {
     let mut files: Vec<FileWatch> = Vec::new();
     let mut offsets: HashMap<PathBuf, u64> = HashMap::new();
-    let mut changed: HashMap<PathBuf, Instant> = HashMap::new();
+    // Path → its first and latest change since it last fired.
+    let mut changed: HashMap<PathBuf, (Instant, Instant)> = HashMap::new();
     let mut online = true;
     let mut offline_at: Option<Instant> = None;
     loop {
-        let next = changed.values().map(|at| *at + QUIET).chain(offline_at).min();
+        let next = changed.iter().map(|(path, at)| due(&files, path, *at)).chain(offline_at).min();
         let input = match next {
             Some(deadline) => inputs.recv_timeout(deadline.saturating_duration_since(Instant::now())),
             None => inputs.recv().map_err(|_| RecvTimeoutError::Disconnected),
@@ -122,7 +126,10 @@ fn deliver(inputs: &Receiver<Input>, tx: &Sender<Message>) {
                     .collect();
                 changed.clear();
             }
-            Ok(Input::Changed(path)) => _ = changed.insert(path, Instant::now()),
+            Ok(Input::Changed(path)) => {
+                let now = Instant::now();
+                changed.entry(path).and_modify(|(_, latest)| *latest = now).or_insert((now, now));
+            }
             Ok(Input::System(SystemEvent::Offline, debounce)) => {
                 if online && offline_at.is_none() {
                     offline_at = Some(Instant::now() + debounce);
@@ -144,7 +151,7 @@ fn deliver(inputs: &Receiver<Input>, tx: &Sender<Message>) {
             occurrences.push(Occurrence::System(SystemEvent::Offline));
         }
         let quiet: Vec<PathBuf> =
-            changed.iter().filter(|(_, at)| **at + QUIET <= now).map(|(p, _)| p.clone()).collect();
+            changed.iter().filter(|(path, at)| due(&files, path, **at) <= now).map(|(p, _)| p.clone()).collect();
         for path in quiet {
             changed.remove(&path);
             let matching: Vec<&FileWatch> = files.iter().filter(|f| f.matches(&path)).collect();
@@ -152,9 +159,9 @@ fn deliver(inputs: &Receiver<Input>, tx: &Sender<Message>) {
             let mut lines = Vec::new();
             if !needles.is_empty() {
                 let from = offsets.get(&path).copied().unwrap_or(0);
-                let (to, appended) = appended_lines(&path, from).unwrap_or((from, Vec::new()));
+                let (to, appended) = appended_lines(&path, from, &needles).unwrap_or((from, Vec::new()));
                 offsets.insert(path.clone(), to);
-                lines = appended.into_iter().filter(|(_, line)| needles.iter().any(|n| line.contains(n))).collect();
+                lines = appended;
             }
             if !lines.is_empty() || matching.iter().any(|f| f.line_contains.is_none()) {
                 occurrences.push(Occurrence::File { path, lines });
@@ -168,8 +175,19 @@ fn deliver(inputs: &Receiver<Input>, tx: &Sender<Message>) {
     }
 }
 
-/// The complete lines written past `from`, and the offset after the last of them.
-fn appended_lines(path: &Path, from: u64) -> io::Result<(u64, Vec<(u64, String)>)> {
+/// When a changed file fires: once quiet, or at most `MAX_WAIT` after its first change if only lines are read from it,
+/// since a rule on the whole file must not see it half-written.
+fn due(files: &[FileWatch], path: &Path, (first, latest): (Instant, Instant)) -> Instant {
+    let quiet = latest + QUIET;
+    if files.iter().filter(|f| f.matches(path)).all(|f| f.line_contains.is_some()) {
+        quiet.min(first + MAX_WAIT)
+    } else {
+        quiet
+    }
+}
+
+/// The complete lines written past `from` that contain one of `needles`, and the offset after the last complete line.
+fn appended_lines(path: &Path, from: u64, needles: &[&str]) -> io::Result<(u64, Vec<(u64, String)>)> {
     let mut file = File::open(path)?;
     let len = file.metadata()?.len();
     if len < from || len - from > MAX_APPENDED {
@@ -182,10 +200,11 @@ fn appended_lines(path: &Path, from: u64) -> io::Result<(u64, Vec<(u64, String)>
     let mut at = from;
     let lines = bytes[..complete]
         .split_inclusive(|b| *b == b'\n')
-        .map(|line| {
+        .filter_map(|line| {
             let start = at;
             at += line.len() as u64;
-            (start, String::from_utf8_lossy(line).trim_end().to_string())
+            let text = String::from_utf8_lossy(line);
+            needles.iter().any(|n| text.contains(n)).then(|| (start, text.trim_end().to_string()))
         })
         .collect();
     Ok((at, lines))

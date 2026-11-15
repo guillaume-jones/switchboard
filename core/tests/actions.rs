@@ -540,6 +540,13 @@ fn snapshots_skip_unchanged_databases_and_keep_the_newest() {
     assert_eq!(count(&dir), 2, "the oldest expired snapshot is deleted");
     engine.tick(start + 10_000_001);
     assert_eq!(count(&dir), 1, "expired snapshots are deleted, the newest is always kept");
+    engine.tick(start + 20_000_000);
+    assert_eq!(count(&dir), 1, "an expired newest snapshot is kept until a newer one is written");
+    engine.write("prs.add", json!({"id": 3}), card()).unwrap();
+    engine.tick(start + 20_000_001);
+    assert_eq!(count(&dir), 2);
+    engine.tick(start + 20_000_002);
+    assert_eq!(count(&dir), 1, "the previous snapshot is deleted once a newer one exists");
 }
 
 #[test]
@@ -791,6 +798,31 @@ fn file_rules_fire_on_changes_and_on_appended_matching_lines() {
     append(b" ends\n");
     let notes = until(&engine, "log_notes", json!({}), 5, |r| r.len() == 5);
     assert!(notes.iter().any(|n| n["key"] == "ERROR partial ends"), "{notes:?}");
+}
+
+#[test]
+fn line_rules_fire_while_a_file_is_appended_to_continuously() {
+    let watched = tempfile::tempdir().unwrap();
+    let log = watched.path().join("app.log");
+    fs::write(&log, "").unwrap();
+    let pattern = watched.path().join("*.log").display().to_string();
+    let h = home(&[(
+        "rules/errors.json",
+        &format!(r#"{{"id": "errors", "when": {{"files": "{pattern}", "line_contains": "ERROR"}}, "into": "log.note", "args": {{"key": "{{line}}"}}}}"#),
+    )]);
+    let (engine, _rx) = open(h.path());
+    until(&engine, "core_rules", json!({"rule": "errors"}), 5, |r| r.len() == 1);
+    std::thread::sleep(Duration::from_millis(300));
+    let start = std::time::Instant::now();
+    for k in 0.. {
+        let line = format!("ERROR {k}\n");
+        std::io::Write::write_all(&mut fs::OpenOptions::new().append(true).open(&log).unwrap(), line.as_bytes()).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        if !engine.query("log_notes", json!({})).unwrap().as_array().unwrap().is_empty() {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(3), "never fired while the file kept changing");
+    }
 }
 
 #[test]

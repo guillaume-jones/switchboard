@@ -13,3 +13,6 @@ switchboard-core = { path = "core" }
 oxc = { version = "=0.158.0", default-features = false, features = ["codegen", "semantic", "transformer"] }
 serde_json = "1"
 tempfile = "3"
+
+[profile.release]
+lto = "thin"

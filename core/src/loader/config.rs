@@ -86,7 +86,7 @@ impl Settings {
             seconds("open_run_expiry", 86_400),
             seconds("offline_debounce", 3),
             seconds("snapshot_interval", 3_600),
-            seconds("snapshot_retention", 604_800),
+            seconds("snapshot_retention", 172_800),
             seconds("retention", 2_592_000),
         );
         let (queue_run_expiry, idle_after) = (seconds("queue_run_expiry", 3_600), seconds("idle_after", 120));

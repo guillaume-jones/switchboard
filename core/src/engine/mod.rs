@@ -147,6 +147,8 @@ pub(crate) enum Message {
         command: String,
         args: Value,
         origin: Origin,
+        /// Chosen by the caller, so that sending the same run twice starts it once.
+        id: Option<String>,
         reply: Sender<Result<String>>,
     },
     Event(Event),
@@ -246,12 +248,12 @@ impl Shared {
         result.recv().map_err(|_| anyhow!("engine stopped"))?
     }
 
-    fn run(&self, name: &str, args: Value, origin: Origin) -> Result<String> {
+    fn run(&self, name: &str, args: Value, origin: Origin, id: Option<String>) -> Result<String> {
         if !self.loaded().commands.contains_key(name) && !BUILTINS.contains(&name) {
             bail!("no command named {name}");
         }
         let (reply, result) = channel();
-        let message = Message::Run { command: name.into(), args, origin, reply };
+        let message = Message::Run { command: name.into(), args, origin, id, reply };
         self.tx.send(message).map_err(|_| anyhow!("engine stopped"))?;
         result.recv().map_err(|_| anyhow!("engine stopped"))?
     }
@@ -433,7 +435,12 @@ impl Engine {
 
     /// Queues a run of a command by hand, which no limit applies to, and returns its id.
     pub fn run(&self, name: &str, args: Value, origin: Origin) -> Result<String> {
-        self.shared.run(name, args, origin)
+        self.shared.run(name, args, origin, None)
+    }
+
+    /// `run` with an id chosen by the caller: a run that already has this id is not started again.
+    pub fn run_as(&self, id: &str, name: &str, args: Value, origin: Origin) -> Result<String> {
+        self.shared.run(name, args, origin, Some(id.into()))
     }
 
     pub fn finish_run(&self, run_id: &str, ok: bool, summary: Option<&str>) -> Result<()> {
@@ -457,9 +464,22 @@ impl Engine {
             .filter(|d| d.is_error())
             .map(|d| json!({ "path": d.path, "message": d.message }))
             .collect();
+        let queue_expiry: Map<String, Value> = loaded
+            .sources
+            .iter()
+            .flat_map(|(name, source)| {
+                source
+                    .config
+                    .queue_expiry
+                    .iter()
+                    .map(move |(command, expiry)| (format!("{name}.{command}"), expiry.as_secs().into()))
+            })
+            .collect();
         json!({
             "root": loaded.settings.root,
             "depth_cap": loaded.settings.depth_cap,
+            "queue_run_expiry": loaded.settings.queue_run_expiry.as_secs(),
+            "queue_expiry": queue_expiry,
             "sources": sources,
             "cards": loaded.cards.keys().collect::<Vec<_>>(),
             "commands": loaded.commands.keys().map(String::as_str).chain(BUILTINS).collect::<Vec<_>>(),

@@ -24,6 +24,7 @@ async function reload() {
 
 reload()
 bridge.on('config', reload)
+bridge.on('reconnect', reload)
 
 function watch(listener: () => void) {
   listeners.add(listener)

@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
+use std::sync::atomic::Ordering::SeqCst;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::Duration;
@@ -164,8 +164,8 @@ impl WriteLoop {
                     }
                     settled.write_replies.extend(reply.map(|reply| (reply, result)));
                 }
-                Message::Run { command, args, origin, reply } => {
-                    settled.run_replies.push((reply, batch.insert_manual_run(&command, &args, &origin)));
+                Message::Run { command, args, origin, id, reply } => {
+                    settled.run_replies.push((reply, batch.insert_manual_run(&command, &args, &origin, id)));
                 }
                 Message::Event(event) => batch.events.push(event),
                 Message::Evaluate { rules, rows, caused_by } => {
@@ -202,10 +202,8 @@ impl WriteLoop {
     }
 }
 
-/// Unique as long as fewer than 4096 ids are made in one millisecond; ordered by time, then roughly by creation.
 fn new_run_id() -> String {
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    format!("{:x}{:03x}", now_ms(), NEXT.fetch_add(1, SeqCst) % 4096)
+    uuid::Uuid::new_v4().to_string()
 }
 
 fn render(template: &str, row: &Value) -> String {
@@ -322,8 +320,20 @@ impl Batch<'_> {
         self.write(&format!("core.{writer}"), &params, &Origin::engine())
     }
 
-    fn insert_manual_run(&mut self, command: &str, args: &Value, origin: &Origin) -> Result<String> {
-        let id = new_run_id();
+    fn insert_manual_run(
+        &mut self,
+        command: &str,
+        args: &Value,
+        origin: &Origin,
+        id: Option<String>,
+    ) -> Result<String> {
+        if let Some(id) = &id {
+            let exists = self.conn.prepare_cached("SELECT 1 FROM core.runs WHERE id = ?1")?.exists([id])?;
+            if exists {
+                return Ok(id.clone());
+            }
+        }
+        let id = id.unwrap_or_else(new_run_id);
         let run = json!({ "id": id, "command": command, "args": args.to_string(), "parent": origin.run_id, "depth": 0, "rule": null, "git_commit": self.loaded.commit });
         self.core_write("run_insert", run)?;
         Ok(id)

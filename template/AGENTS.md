@@ -80,7 +80,7 @@ Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started i
 
 ## `source.json` and `settings.json`
 
-`source.json`: `item_card` (card for this source's refs, gets `ref` and `size`), `snapshot_interval`, `snapshot_retention` (seconds), `timeouts` (`{ "<command>": seconds }`).
+`source.json`: `item_card` (card for this source's refs, gets `ref` and `size`), `snapshot_interval`, `snapshot_retention` (seconds), `timeouts` (`{ "<command>": seconds }`), `queue_expiry` (`{ "<command>": seconds }`: how long a run queued offline on another device may wait; `0` refuses to queue it, for commands that only make sense right away).
 
 `settings.json` (numbers are positive integers, seconds unless noted):
 
@@ -97,6 +97,8 @@ Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started i
 | `snapshot_interval` / `snapshot_retention` | `3600` / `604800` | |
 | `retention` | `2592000` | events and finished runs |
 | `depth_cap` | `20` | card nesting |
+| `remote` | none | HTTPS port that `tailscale serve` exposes the board on to your other devices; none keeps it local |
+| `queue_run_expiry` | `3600` | how long a run queued offline on another device may wait before it is dropped; writes never expire |
 
 ## Cards
 
@@ -113,6 +115,8 @@ useExpose({ selected: "prs:4812" })  // context variables for key bindings
 <CardSlot component="PRList" props={{}} size="compact" id="prs" />
 <Item ref="prs:4812" size="compact" />
 ```
+
+On another device without a connection to the desktop, `useQuery` returns the last rows it saw, `mutate` queues the write and resolves to `0`, and `run` queues the run and resolves to its id.
 
 A subscription re-runs after every write to a table it reads and sends its whole result when it changes, so never mount a view over a growing table (`core_events`, `core_runs`, `core_firings`, your own logs) unless the filter keeps the result small (`kind: "error"`, one `run_id`). A filter that still matches a growing set, like `kind: "write"`, is as slow as none: use a query with a limit.
 

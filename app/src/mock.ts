@@ -215,7 +215,12 @@ const KEYMAP: Binding[] = [
   { key: 'd', context: 'card:PRList', write: 'prs.dismiss', args: { ref: '{selected}' } },
 ]
 
-const listeners: { [E in keyof Events]: ((payload: Events[E]) => void)[] } = { rows: [], config: [], card: [] }
+const listeners: { [E in keyof Events]: ((payload: Events[E]) => void)[] } = {
+  rows: [],
+  config: [],
+  card: [],
+  reconnect: [],
+}
 const emit = <E extends keyof Events>(event: E, payload: Events[E]) => {
   for (const listener of listeners[event]) listener(payload)
 }
@@ -260,6 +265,8 @@ const handlers: Handlers = {
   config: () => ({
     root: 'Root',
     depth_cap: 20,
+    queue_run_expiry: 3600,
+    queue_expiry: {},
     sources: {
       prs: { item_card: 'PRItem' },
       sessions: {},

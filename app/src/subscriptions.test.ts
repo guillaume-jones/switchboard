@@ -96,3 +96,25 @@ test('rows pushed before the subscription registers are not lost', async () => {
   expect(e.getSnapshot()).toEqual([{ n: 2 }])
   expect(l).toHaveBeenCalledOnce()
 })
+
+test('a reconnect reopens open subscriptions under new ids', async () => {
+  const s = subscription('reconnecting')
+  const off = s.subscribe(() => {})
+  await tick()
+  const ids = async () =>
+    Promise.all(
+      bridge.subscribe.mock.calls.flatMap(([name], i) =>
+        name === 'reconnecting' ? [bridge.subscribe.mock.results[i].value.then((r: { id: number }) => r.id)] : [],
+      ),
+    )
+  handlers.reconnect(null)
+  await tick()
+  const [before, after] = await ids()
+  expect(after).not.toBe(before)
+  handlers.rows({ id: before, rows: [{ n: 'stale' }] })
+  handlers.rows({ id: after, rows: [{ n: 'fresh' }] })
+  expect(s.getSnapshot()).toEqual([{ n: 'fresh' }])
+  off()
+  await tick()
+  expect(bridge.unsubscribe).toHaveBeenCalledWith(after)
+})

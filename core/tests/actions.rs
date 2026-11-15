@@ -222,6 +222,23 @@ fn final_stdout_line_refines_state_and_finish_closes_open_runs() {
 }
 
 #[test]
+fn a_run_sent_twice_with_its_id_starts_once() {
+    let h = home(&[("sources/prs/commands/launch", "#!/bin/sh\n")]);
+    let (engine, _rx) = open(h.path());
+    let id = "7f6c2a8e-34d1-4b8e-9a51-0c2e9d1f6b3a";
+    assert_eq!(engine.run_as(id, "prs.launch", json!({}), card()).unwrap(), id);
+    assert_eq!(engine.run_as(id, "prs.launch", json!({}), card()).unwrap(), id);
+    until(&engine, "core_runs", json!({"id": id}), 5, |r| r[0]["state"] == "success");
+    assert_eq!(engine.query("core_runs", json!({"command": "prs.launch"})).unwrap().as_array().unwrap().len(), 1);
+    let generated = engine.run("prs.launch", json!({}), card()).unwrap();
+    assert!(uuid_like(&generated), "{generated}");
+}
+
+fn uuid_like(id: &str) -> bool {
+    id.len() == 36 && id.split('-').map(str::len).eq([8, 4, 4, 4, 12])
+}
+
+#[test]
 fn timeout_kills_the_process_group() {
     let h = home(&[
         ("sources/prs/source.json", r#"{"timeouts": {"slow": 1}}"#),

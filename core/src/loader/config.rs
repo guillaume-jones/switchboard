@@ -28,6 +28,10 @@ pub struct Settings {
     pub hotkey: String,
     /// A view whose row count is shown in the menu bar; empty for none.
     pub menu_bar: String,
+    /// The HTTPS port `tailscale serve` exposes the board on to other devices; `None` keeps it local.
+    pub remote: Option<u16>,
+    /// How long another device may hold a run it queued while offline before it is dropped instead of sent.
+    pub queue_run_expiry: Duration,
 }
 
 const SETTINGS: &str = "settings.json";
@@ -79,6 +83,14 @@ impl Settings {
             seconds("snapshot_retention", 604_800),
             seconds("retention", 2_592_000),
         );
+        let queue_run_expiry = seconds("queue_run_expiry", 3_600);
+        let remote = fields.get("remote").and_then(|v| {
+            let port = positive_integer(v).and_then(|n| u16::try_from(n).ok());
+            if port.is_none() {
+                diags.error(SETTINGS, "remote must be a port number (1 to 65535)");
+            }
+            port
+        });
         let mut text = |key: &str, default: &str| match fields.get(key) {
             None => default.to_string(),
             Some(Value::String(s)) => s.clone(),
@@ -102,6 +114,8 @@ impl Settings {
             terminal: text("terminal", "Terminal"),
             hotkey: text("hotkey", "cmd-shift-space"),
             menu_bar: text("menu_bar", ""),
+            remote,
+            queue_run_expiry,
         }
     }
 }
@@ -115,6 +129,8 @@ pub struct SourceConfig {
     pub snapshot_retention: Option<Duration>,
     /// Command name (without the source prefix) → timeout.
     pub timeouts: BTreeMap<String, Duration>,
+    /// Command name (without the source prefix) → how long it may wait in another device's outbox; zero for never.
+    pub queue_expiry: BTreeMap<String, Duration>,
 }
 
 impl SourceConfig {
@@ -149,26 +165,32 @@ impl SourceConfig {
                     config.snapshot_retention = positive_integer(value).map(Duration::from_secs);
                     config.snapshot_retention.is_some()
                 }
-                "timeouts" => {
-                    let timeouts = value.as_object().and_then(|timeouts| {
-                        timeouts
+                "timeouts" | "queue_expiry" => {
+                    let allows_zero = key == "queue_expiry";
+                    let seconds = value.as_object().and_then(|entries| {
+                        entries
                             .iter()
                             .map(|(command, seconds)| {
                                 let known = commands.contains_key(&format!("{source}.{command}"));
-                                let seconds = positive_integer(seconds).filter(|_| known)?;
+                                let seconds = seconds.as_u64().filter(|n| known && (allows_zero || *n > 0))?;
                                 Some((command.clone(), Duration::from_secs(seconds)))
                             })
                             .collect::<Option<BTreeMap<_, _>>>()
                     });
-                    let valid = timeouts.is_some();
-                    config.timeouts = timeouts.unwrap_or_default();
+                    let valid = seconds.is_some();
+                    let seconds = seconds.unwrap_or_default();
+                    if allows_zero {
+                        config.queue_expiry = seconds
+                    } else {
+                        config.timeouts = seconds
+                    }
                     valid
                 }
                 _ => {
                     diags.error(
                         &path,
                         format!(
-                            "unknown field {key} (expected item_card, snapshot_interval, snapshot_retention, timeouts)"
+                            "unknown field {key} (expected item_card, snapshot_interval, snapshot_retention, timeouts, queue_expiry)"
                         ),
                     );
                     continue;
@@ -178,6 +200,7 @@ impl SourceConfig {
                 let expected = match key.as_str() {
                     "item_card" => "the name of a card in cards/",
                     "timeouts" => "an object mapping this source's command names to seconds",
+                    "queue_expiry" => "an object mapping this source's command names to seconds (0 for never)",
                     _ => "a positive number of seconds",
                 };
                 diags.error(&path, format!("{key} must be {expected}"));

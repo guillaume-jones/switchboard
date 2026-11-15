@@ -7,10 +7,11 @@ import {
   type ReactNode,
 } from 'react'
 import { CardSlot, mutate, run } from './switchboard'
-import type { Binding, Config, Params } from './bridge'
+import { isRemote, type Binding, type Config, type Params } from './bridge'
 import { useConfig } from './config'
 import { activeStack, focusStep, type SlotFrame } from './focus'
 import { bindingAction, eventKey, groupBindings, matchBindings, normalizeKey, type Action, type Hit } from './keymap'
+import { cancel, useRemoteStatus } from './remote'
 
 const SHELL_COMMANDS = ['palette.open', 'keymap.context', 'card.focus_next', 'card.focus_prev'] as const
 type ShellCommand = (typeof SHELL_COMMANDS)[number]
@@ -85,6 +86,37 @@ function LoadedShell({ config }: { config: Config }) {
       )}
       {overlay?.kind === 'context' && <KeyContext bindingsByKey={bindingsByKey} stack={overlay.stack} close={close} />}
       {notice && <div className="notice">{notice}</div>}
+      {isRemote && <RemoteStatus />}
+    </>
+  )
+}
+
+const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+/** On another device: when the board is from the cache, and the writes and runs waiting to be sent. */
+function RemoteStatus() {
+  const { online, asOf, outbox } = useRemoteStatus()
+  const [open, setOpen] = useState(false)
+  if (online && outbox.length === 0) return null
+  return (
+    <>
+      <div className="status">
+        {!online && <span>Offline{asOf ? ` · as of ${clock(asOf)}` : ''}</span>}
+        {outbox.length > 0 && <button onClick={() => setOpen(true)}>{outbox.length} pending</button>}
+      </div>
+      {open && outbox.length > 0 && (
+        <Overlay close={() => setOpen(false)}>
+          {outbox.map(item => (
+            <div key={item.id} className="row">
+              <span>
+                {item.name} <span className="muted">{clock(item.at)}</span>
+                {item.error && <span className="error"> {item.error}</span>}
+              </span>
+              <button onClick={() => cancel(item.id)}>{item.error ? 'Dismiss' : 'Cancel'}</button>
+            </div>
+          ))}
+        </Overlay>
+      )}
     </>
   )
 }

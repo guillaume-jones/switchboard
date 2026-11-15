@@ -9,78 +9,68 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 
+mod remote;
 #[cfg(target_os = "macos")]
 mod system_events;
 
-struct App {
+pub(crate) struct App {
     engine: RwLock<Result<Engine, String>>,
+    /// The window's subscriptions.
     subs: Mutex<HashSet<u64>>,
+    remote: remote::Clients,
     hotkey: Mutex<String>,
     menu_bar: Mutex<(String, u64)>,
 }
 
-type Reply = Result<Value, String>;
+pub(crate) type Reply = Result<Value, String>;
 
-fn with(app: &App, f: impl FnOnce(&Engine) -> anyhow::Result<Value>) -> Reply {
+pub(crate) fn with(app: &App, f: impl FnOnce(&Engine) -> anyhow::Result<Value>) -> Reply {
     match &*app.engine.read().unwrap() {
         Ok(engine) => f(engine).map_err(|e| format!("{e:#}")),
         Err(e) => Err(e.clone()),
     }
 }
 
-fn origin() -> Origin {
-    Origin { trigger: "app".into(), run_id: None }
-}
-
-#[tauri::command(async)]
-fn config(app: State<App>) -> Reply {
-    with(&app, |e| Ok(e.config()))
-}
-
-#[tauri::command(async)]
-fn card(app: State<App>, name: String) -> Reply {
-    with(&app, |e| e.card(&name))
-}
-
-#[tauri::command(async)]
-fn subscribe(app: State<App>, name: String, params: Value) -> Reply {
-    with(&app, |e| {
-        let (id, rows) = e.subscribe(&name, params)?;
-        app.subs.lock().unwrap().insert(id);
-        Ok(json!({ "id": id, "rows": rows }))
+/// Every call the shell makes, from the window over IPC or from another device over HTTP. `subs` are the caller's
+/// subscriptions, dropped when it goes away.
+pub(crate) fn dispatch(app: &App, subs: &Mutex<HashSet<u64>>, command: &str, args: Value, trigger: &str) -> Reply {
+    let text = |key: &str| args[key].as_str().unwrap_or_default().to_string();
+    let params = |key: &str| if args[key].is_null() { json!({}) } else { args[key].clone() };
+    let origin = || Origin { trigger: trigger.into(), run_id: None };
+    with(app, |e| match command {
+        "config" => Ok(e.config()),
+        "card" => e.card(&text("name")),
+        "subscribe" => {
+            let (id, rows) = e.subscribe(&text("name"), params("params"))?;
+            subs.lock().unwrap().insert(id);
+            Ok(json!({ "id": id, "rows": rows }))
+        }
+        "unsubscribe" => {
+            let id = args["id"].as_u64().unwrap_or_default();
+            subs.lock().unwrap().remove(&id);
+            e.unsubscribe(id);
+            Ok(Value::Null)
+        }
+        "mutate" => Ok(json!({ "changes": e.write(&text("name"), params("params"), origin())? })),
+        "run" => {
+            let run_id = match args["id"].as_str() {
+                Some(id) => e.run_as(id, &text("name"), params("args"), origin())?,
+                None => e.run(&text("name"), params("args"), origin())?,
+            };
+            Ok(json!({ "run_id": run_id }))
+        }
+        "revert_last_commit" => e.revert_last_commit().map(|()| Value::Null),
+        "report_error" => {
+            e.report_error(&text("card"), &text("message"), &text("stack"));
+            Ok(Value::Null)
+        }
+        _ => anyhow::bail!("unknown command {command}"),
     })
 }
 
 #[tauri::command(async)]
-fn unsubscribe(app: State<App>, id: u64) -> Reply {
-    app.subs.lock().unwrap().remove(&id);
-    with(&app, |e| {
-        e.unsubscribe(id);
-        Ok(Value::Null)
-    })
-}
-
-#[tauri::command(async)]
-fn mutate(app: State<App>, name: String, params: Value) -> Reply {
-    with(&app, |e| Ok(json!({ "changes": e.write(&name, params, origin())? })))
-}
-
-#[tauri::command(async)]
-fn run(app: State<App>, name: String, args: Value) -> Reply {
-    with(&app, |e| Ok(json!({ "run_id": e.run(&name, args, origin())? })))
-}
-
-#[tauri::command(async)]
-fn revert_last_commit(app: State<App>) -> Reply {
-    with(&app, |e| e.revert_last_commit().map(|_| Value::Null))
-}
-
-#[tauri::command(async)]
-fn report_error(app: State<App>, card: String, message: String, stack: String) -> Reply {
-    with(&app, |e| {
-        e.report_error(&card, &message, &stack);
-        Ok(Value::Null)
-    })
+fn call(app: State<App>, command: String, args: Value) -> Reply {
+    dispatch(&app, &app.subs, &command, args, "app")
 }
 
 fn forward(app: &AppHandle) {
@@ -158,7 +148,9 @@ impl switchboard_core::Emitter for Forward {
             }
             _ => {}
         }
-        let _ = self.0.emit(event, payload);
+        if !self.0.state::<App>().remote.emit(event, &payload) {
+            let _ = self.0.emit(event, payload);
+        }
     }
 }
 
@@ -177,19 +169,11 @@ fn main() {
         .manage(App {
             engine: RwLock::new(Err("starting".into())),
             subs: Mutex::default(),
+            remote: remote::Clients::default(),
             hotkey: Mutex::default(),
             menu_bar: Mutex::default(),
         })
-        .invoke_handler(tauri::generate_handler![
-            config,
-            card,
-            subscribe,
-            unsubscribe,
-            mutate,
-            run,
-            revert_last_commit,
-            report_error
-        ])
+        .invoke_handler(tauri::generate_handler![call])
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Started {
                 let state = webview.state::<App>();
@@ -229,6 +213,9 @@ fn main() {
                 }
             }
             *app.state::<App>().engine.write().unwrap() = opened;
+            if let Some(port) = settings(&handle).and_then(|s| s.remote) {
+                remote::start(handle.clone(), port);
+            }
             menu_bar(&handle);
             hotkey(&handle);
             #[cfg(target_os = "macos")]

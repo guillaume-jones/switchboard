@@ -137,7 +137,7 @@ flowchart LR
 - **Runner:** spawns command processes, enforces timeouts by killing the process group, captures stdout for `into` and the outcome line, and reports the exit back to the writer thread. The tick marks `running` runs whose process is gone and expired `open` runs as `unknown`, and trims events and runs past `retention`.
 - **Reload:** file changes (debounced 100 ms; `data/`, `.git` and `switchboard.d.ts` ignored) re-run the loader. Only a clean load is swapped in: connections are rebuilt, subscriptions re-resolved, rules re-synced, and changed cards pushed for hot reload. Otherwise the last good state keeps running and the errors go to `core_events`. If the folder fails at startup, the app runs the `core` source alone.
 - **Socket:** `data/swb.sock` serves `swb`. On start, `data/spool/` is replayed in order before accepting connections.
-- **Wrapper (Tauri):** IPC commands for the shell, `core.notify` as macOS notifications (clicking brings the window forward), the row count of the `menu_bar` view in the menu bar, the global `hotkey`, and closing the window hides it. One instance per folder, enforced by `data/engine.lock`.
+- **Wrapper (Tauri):** one IPC command, `call`, for the shell (shared with other devices, below), `core.notify` as macOS notifications (clicking brings the window forward), the row count of the `menu_bar` view in the menu bar, the global `hotkey`, and closing the window hides it. One instance per folder, enforced by `data/engine.lock`.
 
 ## Storage
 
@@ -153,7 +153,7 @@ flowchart LR
 
 Embedded in the binary, written only by the engine, and the only source whose schema may drop tables.
 
-- **`runs`:** id, command, args, state, parent, depth, rule, pid, summary, commit, timestamps.
+- **`runs`:** id (a UUID, chosen by the engine or by a device that queued the run offline; order is `created_at`), command, args, state, parent, depth, rule, pid, summary, commit, timestamps.
   ```
   queued → running → success | failure | open
   open → success | failure      (swb run finish, core.run_finish, or a rule)
@@ -200,6 +200,16 @@ The shell renders one root card. All layout is cards rendering cards.
 - Cards are fetched over IPC as compiled module bundles and evaluated in the webview; each card gets its own instance of the helpers it imports.
 - **State:** navigation and layout are data in the view-less `ui` source; other per-slot state is in local storage keyed by the slot id.
 - **Undo:** `git revert` for the folder, `core.restore` for data.
+
+## Other devices
+
+With `remote` set, the wrapper serves the shell on a local port and runs `tailscale serve --bg --https=<remote>` to it, so the board opens at `https://<device>.<tailnet>.ts.net:<remote>` on your other devices (installed on a phone as a home-screen web app). Everything still executes on the desktop.
+
+- **Server** (`app/src-tauri/src/remote.rs`): `GET /*` serves the built shell, `POST /api/<command>` runs the same `call` as IPC with trigger `remote`, and `GET /api/events` is a server-sent event stream per client carrying `rows` (only for that client's subscriptions), `config` and `card`. A client's subscriptions end with its stream.
+- **Access:** a request must carry the `Tailscale-User-Login` of the desktop's own user (set by `tailscale serve`, which strips it from incoming requests), the `ts.net` host, and for `/api/` no cross-site `Origin` or `Sec-Fetch-Site`. The port listens on `127.0.0.1` only. No token: Tailscale is the pairing.
+- **Cache:** every `config`, `card` and `rows` response is kept in IndexedDB, keyed like subscriptions (`name + JSON(params)`), and answers when the desktop is unreachable, with an "as of" time. A subscription never seen before stays loading. A service worker keeps the shell itself, refreshing it in the background.
+- **Outbox:** `mutate` and `run` made offline are queued in IndexedDB and sent in order when the stream reconnects or the app returns to the foreground. Writes never expire and are at-least-once, like the spool. Runs carry an id chosen on the device, so sending one twice starts it once, and are dropped after `queue_run_expiry` (or `source.json` `queue_expiry`; `0` refuses to queue). The shell lists pending, failed and expired items until cancelled or dismissed.
+- **Reconnect:** a new stream is a new client: subscriptions are opened again, cards refetched and the config reloaded.
 
 ## Keymap
 

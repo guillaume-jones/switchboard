@@ -15,6 +15,10 @@ bridge.on('rows', ({ id, rows }) => {
   else if (pendingOpens > 0) earlyRows.set(id, rows)
 })
 
+bridge.on('reconnect', () => {
+  for (const subscription of registry.values()) subscription.reopen()
+})
+
 /** The live result of a view or query, shared by every reader of the same name and params. Shaped for `useSyncExternalStore`. */
 export class Subscription {
   rows: Row[] | undefined
@@ -41,12 +45,21 @@ export class Subscription {
     }
   }
 
+  /** Opens it again under a new id, after the backend dropped it with its connection. */
+  reopen() {
+    const previous = this.#backendId
+    if (!previous) return
+    previous.then(id => id !== undefined && rowHandlers.delete(id))
+    this.#backendId = this.#open()
+  }
+
   async #open() {
     pendingOpens++
     try {
       const { id, rows } = await bridge.subscribe(this.name, this.params)
       rowHandlers.set(id, this.#receive)
       this.rows = earlyRows.get(id) ?? rows
+      this.error = undefined
       return id
     } catch (error) {
       this.error = bridge.toError(error)

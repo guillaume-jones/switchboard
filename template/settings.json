@@ -2,5 +2,6 @@
   "root": "Root",
   "terminal": "Terminal",
   "hotkey": "cmd-shift-space",
-  "menu_bar": "attention_open"
+  "menu_bar": "attention_open",
+  "remote": 8443
 }

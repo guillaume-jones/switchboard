@@ -23,6 +23,12 @@ bridge.on('card', ({ name }) => {
   for (const listener of listeners) listener()
 })
 
+// Cards may have changed while the connection was down.
+bridge.on('reconnect', () => {
+  cache.clear()
+  for (const listener of listeners) listener()
+})
+
 export function watchCards(listener: () => void) {
   listeners.add(listener)
   return () => {

@@ -586,3 +586,25 @@ fn menu_bar_names_an_existing_view() {
     }
     assert_eq!(ok(home(PRS).path(), Mode::Check).settings.menu_bar, "");
 }
+
+#[test]
+fn remote_and_queue_expiry() {
+    let h = home(PRS);
+    assert_eq!(ok(h.path(), Mode::Check).settings.remote, None);
+    write(h.path(), &[("settings.json", r#"{"remote": 8443, "queue_run_expiry": 60}"#)]);
+    let settings = ok(h.path(), Mode::Check).settings;
+    assert_eq!((settings.remote, settings.queue_run_expiry.as_secs()), (Some(8443), 60));
+    write(h.path(), &[("settings.json", r#"{"remote": 70000}"#)]);
+    assert_eq!(errors(h.path()), "settings.json: error: remote must be a port number (1 to 65535)");
+    write(h.path(), &[("settings.json", "{}")]);
+    write(h.path(), &[("sources/prs/commands/open", "#!/bin/sh\n")]);
+    std::process::Command::new("chmod").arg("+x").arg(h.path().join("sources/prs/commands/open")).status().unwrap();
+    write(h.path(), &[("sources/prs/source.json", r#"{"queue_expiry": {"open": 0}}"#)]);
+    let loaded = ok(h.path(), Mode::Check);
+    assert_eq!(loaded.sources["prs"].config.queue_expiry["open"].as_secs(), 0);
+    write(h.path(), &[("sources/prs/source.json", r#"{"queue_expiry": {"nope": 5}}"#)]);
+    assert_eq!(
+        errors(h.path()),
+        "sources/prs/source.json: error: queue_expiry must be an object mapping this source's command names to seconds (0 for never)"
+    );
+}

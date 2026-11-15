@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import * as remote from './remote'
 
 export type Row = Record<string, any>
 export type Params = Record<string, unknown>
@@ -8,6 +9,9 @@ export type Binding = { key: string; context?: string; command?: string | null; 
 export type Config = {
   root: string
   depth_cap: number
+  /** Seconds a run queued on another device while offline stays sendable, by default and per command (0: never queued). */
+  queue_run_expiry: number
+  queue_expiry: Record<string, number>
   sources: Record<string, { item_card?: string | null }>
   cards: string[]
   commands: string[]
@@ -25,7 +29,8 @@ export type Commands = {
   subscribe: { args: { name: string; params: Params }; result: { id: number; rows: Row[] } }
   unsubscribe: { args: { id: number }; result: null }
   mutate: { args: { name: string; params: Params }; result: { changes: number } }
-  run: { args: { name: string; args: Params }; result: { run_id: string } }
+  /** `id`, chosen by a device queuing the run while offline, makes sending it twice start it once. */
+  run: { args: { name: string; args: Params; id?: string }; result: { run_id: string } }
   revert_last_commit: { args: NoArgs; result: null }
   report_error: { args: { card: string; message: string; stack: string }; result: null }
 }
@@ -33,6 +38,8 @@ export type Events = {
   rows: { id: number; rows: Row[] }
   config: null
   card: { name: string }
+  /** Another device's connection came back: its subscriptions and cards are gone on the desktop and are opened again. */
+  reconnect: null
 }
 /** Rejects with an `Error`. */
 export type Backend = {
@@ -44,16 +51,20 @@ export const toError = (thrown: unknown) => (thrown instanceof Error ? thrown : 
 
 const tauri: Backend = {
   invoke: (command, args) =>
-    invoke<Commands[typeof command]['result']>(command, args).catch(thrown => {
+    invoke<Commands[typeof command]['result']>('call', { command, args }).catch(thrown => {
       throw toError(thrown)
     }),
   listen: (event, handler) => void listen<Events[typeof event]>(event, e => handler(e.payload)),
 }
 
+const inWindow = '__TAURI_INTERNALS__' in globalThis
+/** Another device served by the desktop over Tailscale, rather than the Tauri window or the mock in `vite` dev. */
+export const isRemote = !inWindow && !import.meta.env.DEV
+
 async function connect(): Promise<Backend> {
-  if ('__TAURI_INTERNALS__' in globalThis) return tauri
+  if (inWindow) return tauri
   if (import.meta.env.DEV) return (await import('./mock')).default
-  throw new Error('Switchboard must run inside its Tauri window')
+  return remote.connect()
 }
 
 const backend = await connect()

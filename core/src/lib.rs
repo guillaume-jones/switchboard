@@ -5,6 +5,7 @@ mod runner;
 mod socket;
 
 pub use engine::{Emitter, Engine, Origin};
+pub use maintenance::{Template, init};
 pub use loader::{
     Action, BUILTINS, CardBundle, Diagnostic, FileWatch, Level, Loaded, Mode, Rule, SHELL_COMMANDS, Select, Settings,
     Source, SourceConfig, Statement, SystemEvent, Trigger, Watch, Writer, load,

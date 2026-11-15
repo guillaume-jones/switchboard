@@ -188,6 +188,7 @@ Talks to the app over `data/swb.sock`.
 - `swb query <view | source.query> [name=value ...]`
 - `swb run finish <run_id> --ok|--fail [summary]`
 - `swb check`
+- `swb init [<git url> [--copy | -c]] [--force | -f]`: replaces the folder with a clone of the URL that keeps it as `origin` (to pull the template's updates; it ignores `data/` and `cards/switchboard.d.ts` through `.git/info/exclude`), a new repository with the URL's files given `--copy`, or the built-in template without a URL, which is also how the app creates a missing folder. The new folder is built next to the old one and swapped in once complete. Without `--force`, only a missing folder or one still at its first commit with no changes; never while the app holds `data/engine.lock`.
 
 ## Front end
 

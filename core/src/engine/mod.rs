@@ -326,7 +326,7 @@ impl Shared {
 impl Engine {
     pub fn open(home: &Path, emitter: impl Emitter + 'static) -> Result<Engine> {
         if !home.exists() {
-            crate::maintenance::first_run(home)?;
+            crate::maintenance::init(home, crate::maintenance::Template::BuiltIn, false)?;
         }
         let home = home.canonicalize().with_context(|| format!("cannot open {}", home.display()))?;
         fs::create_dir_all(home.join("data"))?;

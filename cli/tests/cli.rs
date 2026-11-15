@@ -206,3 +206,44 @@ fn swb_loads_no_frameworks() {
         "swb links a framework, adding ~1 ms to every hook: its code reaches into the engine\n{libraries}"
     );
 }
+
+#[test]
+fn init_replaces_only_an_untouched_folder_unless_forced() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("folder");
+    let git = |cwd: &Path, args: &[&str]| {
+        let identity = ["-c", "user.name=t", "-c", "user.email=t@t"];
+        assert!(Command::new("git").current_dir(cwd).args(identity).args(args).output().unwrap().status.success());
+    };
+    let stderr = |out: Output| String::from_utf8_lossy(&out.stderr).into_owned();
+
+    assert!(swb(&folder, &["init"], None).status.success());
+    assert!(folder.join("settings.json").is_file());
+    assert!(swb(&folder, &["init"], None).status.success());
+
+    fs::write(folder.join("settings.json"), "{}").unwrap();
+    assert!(stderr(swb(&folder, &["init"], None)).contains("pass --force"));
+
+    let template = dir.path().join("template");
+    fs::create_dir(&template).unwrap();
+    fs::write(template.join("settings.json"), r#"{"remote": null}"#).unwrap();
+    git(&template, &["init", "-q"]);
+    git(&template, &["add", "-A"]);
+    git(&template, &["commit", "-q", "-m", "template"]);
+    assert!(swb(&folder, &["init", template.to_str().unwrap(), "-f"], None).status.success());
+    assert_eq!(fs::read_to_string(folder.join("settings.json")).unwrap(), r#"{"remote": null}"#);
+    assert!(!folder.join("cards").exists());
+    let log = Command::new("git").current_dir(&folder).args(["log", "--format=%s"]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&log.stdout), "template\n");
+
+    assert!(swb(&folder, &["init", "-c", template.to_str().unwrap(), "--force"], None).status.success());
+    let log = Command::new("git").current_dir(&folder).args(["log", "--format=%s"]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&log.stdout), "Initial switchboard folder\n");
+    let remotes = Command::new("git").current_dir(&folder).arg("remote").output().unwrap();
+    assert!(remotes.stdout.is_empty());
+    assert_eq!(fs::read_to_string(folder.join(".gitignore")).unwrap(), "data/\ncards/switchboard.d.ts\n");
+    assert!(swb(&folder, &["init", template.to_str().unwrap(), "--copy"], None).status.success());
+
+    let _engine = Engine::open(&folder, Quiet).unwrap();
+    assert!(stderr(swb(&folder, &["init", "--force"], None)).contains("quit it first"));
+}

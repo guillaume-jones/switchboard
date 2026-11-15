@@ -2,7 +2,7 @@
 
 use crate::loader::Loaded;
 use crate::{DAY_MS, millis, now_ms, sorted_entries};
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use include_dir::{Dir, include_dir};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
@@ -18,28 +18,78 @@ static TEMPLATE: Dir = include_dir!("$CARGO_MANIFEST_DIR/../template");
 const HOOK_MARKER: &str = "switchboard pre-commit hook";
 const TRASH_RETENTION_MS: i64 = 30 * DAY_MS;
 
-/// Creates the folder from the template as a git repository with the pre-commit hook, and commits it.
-pub(crate) fn first_run(home: &Path) -> Result<()> {
-    fs::create_dir_all(home)?;
-    TEMPLATE.extract(home)?;
-    for (_, source) in sorted_entries(&home.join("sources")) {
-        for (_, command) in sorted_entries(&source.join("commands")) {
-            fs::set_permissions(command, fs::Permissions::from_mode(0o755))?;
+const IGNORED: &str = "data/\ncards/switchboard.d.ts\n";
+
+/// Where `init` takes the folder from.
+pub enum Template<'a> {
+    BuiltIn,
+    /// A clone that keeps the URL as `origin`, to pull the template's updates.
+    Linked(&'a str),
+    /// A new repository with the URL's files.
+    Copied(&'a str),
+}
+
+/// Replaces the folder with `template`, built next to it and swapped in once complete. Unless `force`, only a missing
+/// folder or one still at its first commit with no changes is replaced. Never while the app has the folder open.
+pub fn init(home: &Path, template: Template, force: bool) -> Result<()> {
+    let git = |dir: &Path, args: &[&str]| Command::new("git").current_dir(dir).args(args).output();
+    if home.exists() {
+        let lock = fs::File::open(home.join("data/engine.lock"));
+        if lock.is_ok_and(|l| matches!(l.try_lock(), Err(fs::TryLockError::WouldBlock))) {
+            bail!("Switchboard has {} open; quit it first", home.display());
+        }
+        let commits = git(home, &["rev-list", "--count", "HEAD"]).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
+        let changes = git(home, &["status", "--porcelain"]).map(|o| o.stdout);
+        let untouched = home.join(".git").is_dir() && commits.is_ok_and(|c| c == "1") && changes.is_ok_and(|c| c.is_empty());
+        if !untouched && !force {
+            bail!("{} has commits or changes of its own; pass --force to replace it", home.display());
         }
     }
-    fs::write(home.join(".gitignore"), "data/\ncards/switchboard.d.ts\n")?;
-    let git =
-        |args: &[&str]| Command::new("git").current_dir(home).args(args).output().is_ok_and(|o| o.status.success());
-    if git(&["init", "-q"]) {
-        install_hook(home);
-        git(&["add", "-A"]);
-        let commit = ["commit", "-q", "--no-verify", "-m", "Initial switchboard folder"];
-        if !git(&commit) {
-            // Without a configured git identity.
-            let identity = ["-c", "user.name=Switchboard", "-c", "user.email=switchboard@localhost"];
-            git(&[identity.as_slice(), commit.as_slice()].concat());
+    let staging = home.with_extension("init");
+    let _ = fs::remove_dir_all(&staging);
+    match template {
+        Template::BuiltIn => {
+            fs::create_dir_all(&staging)?;
+            TEMPLATE.extract(&staging)?;
+            for (_, source) in sorted_entries(&staging.join("sources")) {
+                for (_, command) in sorted_entries(&source.join("commands")) {
+                    fs::set_permissions(command, fs::Permissions::from_mode(0o755))?;
+                }
+            }
+        }
+        Template::Linked(url) | Template::Copied(url) => {
+            let shallow = matches!(template, Template::Copied(_)).then_some("--depth=1");
+            let out = Command::new("git").args(["clone", "--quiet"]).args(shallow).arg(url).arg(&staging).output()?;
+            if !out.status.success() {
+                bail!("git clone {url}: {}", String::from_utf8_lossy(&out.stderr).trim());
+            }
         }
     }
+    if let Template::Linked(_) = template {
+        fs::write(staging.join(".git/info/exclude"), IGNORED)?;
+    } else {
+        let _ = fs::remove_dir_all(staging.join(".git"));
+        let gitignore = staging.join(".gitignore");
+        let ignored = fs::read_to_string(&gitignore).map(|t| t.trim_end().to_owned() + "\n").unwrap_or_default();
+        if !ignored.lines().any(|l| l == "data/") {
+            fs::write(&gitignore, ignored + IGNORED)?;
+        }
+        let succeeds = |args: &[&str]| git(&staging, args).is_ok_and(|o| o.status.success());
+        if succeeds(&["init", "-q"]) {
+            install_hook(&staging);
+            succeeds(&["add", "-A"]);
+            let commit = ["commit", "-q", "--no-verify", "-m", "Initial switchboard folder"];
+            if !succeeds(&commit) {
+                // Without a configured git identity.
+                let identity = ["-c", "user.name=Switchboard", "-c", "user.email=switchboard@localhost"];
+                succeeds(&[identity.as_slice(), commit.as_slice()].concat());
+            }
+        }
+    }
+    if home.exists() {
+        fs::remove_dir_all(home)?;
+    }
+    fs::rename(&staging, home)?;
     Ok(())
 }
 

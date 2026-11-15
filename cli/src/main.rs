@@ -1,4 +1,4 @@
-use switchboard_core::{Mode, home, load};
+use switchboard_core::{Mode, Template, home, init, load};
 use serde_json::{Map, Value, json};
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -7,20 +7,19 @@ use std::time::SystemTime;
 use std::{env, fs};
 
 const USAGE: &str = "usage:
+  swb init [<git url> [--copy | -c]] [--force | -f]
+      Replace the folder with the built-in template, or a git repo: kept linked to pull its updates,
+      or copied into a new repo with --copy. Refuses a folder with work in it unless --force.
   swb check
+      Validate the folder.
   swb write <source.writer> [name=value ...] [< payload]
+      Call a writer. If the app is closed, the write is queued and applied on its next start.
   swb query <view | source.query> [name=value ...]
+      Print the rows as a JSON array.
   swb run finish <run_id> --ok|--fail [summary]
+      Finish an open run.
 
-Named params are name=value arguments; a value that parses as JSON (4812, true, null, [1], {\"a\":1})
-is passed as that JSON, anything else as text. swb write reads stdin only when the writer takes
-:payload and no payload= argument is given; stdin is then bound to :payload. Otherwise stdin is never
-read, so an open pipe cannot block it.
-RUN_ID from the environment is forwarded, so writes made by a command belong to its run.
-swb query prints the rows as a JSON array. If the app is not running, or closes the connection before
-replying, swb write appends the request (with stdin, when it is not a terminal) to
-$SWITCHBOARD_HOME/data/spool/ and the app replays it, in order, on its next start. Delivery is
-at-least-once.";
+Values that parse as JSON (4812, true, [1], {\"a\":1}) are passed as JSON, anything else as text.";
 
 fn fail(message: impl std::fmt::Display, code: u8) -> ExitCode {
     eprintln!("swb: {message}");
@@ -39,6 +38,25 @@ fn main() -> ExitCode {
         pairs.collect::<Result<Map<_, _>, String>>().map(Value::Object)
     };
     let mut request = match args.as_slice() {
+        ["init", rest @ ..] => {
+            let flag = |names: [&str; 2]| rest.iter().any(|a| names.contains(a));
+            let urls: Vec<&str> = rest.iter().copied().filter(|a| !a.starts_with('-')).collect();
+            if urls.len() > 1 || rest.len() - urls.len() > usize::from(flag(["--force", "-f"])) + usize::from(flag(["--copy", "-c"])) {
+                return fail(USAGE, 2);
+            }
+            let template = match (urls.first(), flag(["--copy", "-c"])) {
+                (None, _) => Template::BuiltIn,
+                (Some(url), false) => Template::Linked(url),
+                (Some(url), true) => Template::Copied(url),
+            };
+            return match init(&home, template, flag(["--force", "-f"])) {
+                Ok(()) => {
+                    println!("initialised {}", home.display());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => fail(format!("{e:#}"), 1),
+            };
+        }
         ["check"] => {
             return match load(&home, Mode::Check) {
                 Ok(loaded) => {

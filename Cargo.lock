@@ -5464,7 +5464,7 @@ dependencies = [
 
 [[package]]
 name = "switchboard"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -5492,7 +5492,7 @@ dependencies = [
 
 [[package]]
 name = "switchboard-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
  "switchboard-core",
@@ -5501,7 +5501,7 @@ dependencies = [
 
 [[package]]
 name = "switchboard-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",

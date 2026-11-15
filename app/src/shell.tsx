@@ -87,30 +87,47 @@ function LoadedShell({ config }: { config: Config }) {
       {overlay?.kind === 'context' && <KeyContext bindingsByKey={bindingsByKey} stack={overlay.stack} close={close} />}
       {notice && <div className="notice">{notice}</div>}
       {isRemote && <RemoteStatus />}
+      {isRemote && <PushPrompt />}
     </>
+  )
+}
+
+const PUSH_PROMPT_DISMISSED = 'switchboard.push_prompt_dismissed'
+
+/** Offered once per installed app, until notifications are enabled or the prompt is dismissed. */
+function PushPrompt() {
+  const { online, push } = useRemoteStatus()
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem(PUSH_PROMPT_DISMISSED) !== null)
+  const [error, setError] = useState('')
+  if (!online || push !== 'off' || dismissed) return null
+  const dismiss = () => {
+    localStorage.setItem(PUSH_PROMPT_DISMISSED, String(Date.now()))
+    setDismissed(true)
+  }
+  return (
+    <div className="toast">
+      <span>Get the desktop's notifications on this device while it is idle or locked?</span>
+      {error && <span className="error">{error}</span>}
+      <div className="actions">
+        <button onClick={dismiss}>Not now</button>
+        <button onClick={() => enableNotifications().catch((e: Error) => setError(e.message))}>Enable</button>
+      </div>
+    </div>
   )
 }
 
 const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
-/** On another device: when the board is from the cache, the writes and runs waiting to be sent, and push. */
+/** On another device: when the board is from the cache, and the writes and runs waiting to be sent. */
 function RemoteStatus() {
-  const { online, asOf, outbox, push } = useRemoteStatus()
+  const { online, asOf, outbox } = useRemoteStatus()
   const [open, setOpen] = useState(false)
-  const [error, setError] = useState('')
-  const offerPush = online && push === 'off'
-  if (online && outbox.length === 0 && !offerPush) return null
+  if (online && outbox.length === 0) return null
   return (
     <>
       <div className="status">
         {!online && <span>Offline{asOf ? ` · as of ${clock(asOf)}` : ''}</span>}
         {outbox.length > 0 && <button onClick={() => setOpen(true)}>{outbox.length} pending</button>}
-        {offerPush && (
-          <button onClick={() => enableNotifications().catch((e: Error) => setError(e.message))}>
-            Enable notifications
-          </button>
-        )}
-        {error && <span className="error">{error}</span>}
       </div>
       {open && outbox.length > 0 && (
         <Overlay close={() => setOpen(false)}>

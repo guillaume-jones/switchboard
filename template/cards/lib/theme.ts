@@ -16,7 +16,8 @@ export const useMobile = () =>
 
 /**
  * Styles shared by every card and the shell, injected once by `Root`. Target phones with `:root[data-mobile]`
- * rather than repeating the media query.
+ * rather than repeating the media query. `--top-edge` is the band iOS blurs at the top of an installed app; `Root`
+ * fills it with an opaque bar, and anything fixed to the top goes below it.
  */
 export const THEME = `
 :root {
@@ -35,6 +36,7 @@ button, input, textarea, select {
   border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px;
 }
 :root[data-mobile] { font-size: 16px; }
+@media (display-mode: standalone) { :root[data-mobile] { --top-edge: 2rem; } }
 :root[data-mobile] :is(button, input, textarea, select) { min-height: 36px; padding: 6px 10px; }
 .chip {
   display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px;

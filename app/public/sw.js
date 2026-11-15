@@ -1,7 +1,9 @@
-// Shows the desktop's notifications, and keeps the shell openable offline: every same-origin GET outside /api/ is answered from the cache and refreshed
-// in the background. A new index.html is cached only with the assets it references, so the next offline start
-// never finds half an update.
+// Shows the desktop's notifications, and keeps the shell openable offline: every same-origin GET outside /api/ comes
+// from the desktop when it answers within a few seconds, and from the cache otherwise. A new index.html is cached
+// only with the assets it references, so the next offline start never finds half an update.
 const CACHE = 'switchboard-shell'
+/** How long to wait for the desktop before opening from the cache. */
+const NETWORK_TIMEOUT_MS = 3000
 
 async function cacheShell(cache, index) {
   const html = await index.clone().text()
@@ -24,14 +26,21 @@ self.addEventListener('fetch', event => {
   const key = navigation ? '/' : event.request
   event.respondWith(
     caches.open(CACHE).then(async cache => {
-      const hit = await cache.match(key)
-      const fresh = fetch(event.request).then(async response => {
-        if (response.ok) await (navigation ? cacheShell(cache, response.clone()) : cache.put(key, response.clone()))
+      // Hashed build output never changes.
+      if (url.pathname.startsWith('/assets/')) {
+        const hit = await cache.match(key)
+        if (hit) return hit
+      }
+      try {
+        const timeout = new Promise((_, reject) => setTimeout(reject, NETWORK_TIMEOUT_MS))
+        const response = await Promise.race([fetch(event.request), timeout])
+        if (response.ok) {
+          event.waitUntil(navigation ? cacheShell(cache, response.clone()) : cache.put(key, response.clone()))
+        }
         return response
-      })
-      if (!hit) return fresh
-      event.waitUntil(fresh.catch(() => {}))
-      return hit
+      } catch {
+        return (await cache.match(key)) ?? Response.error()
+      }
     }),
   )
 })

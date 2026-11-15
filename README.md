@@ -26,7 +26,7 @@ The template's `settings.json` sets `"remote": 8443`, which serves the board to 
 1. Install Tailscale on the desktop and the phone, logged into the same account. In the admin console, enable MagicDNS and HTTPS certificates.
 2. Start the app: it runs `tailscale serve --bg --https=8443` itself. Problems show on the Health card as `remote` errors.
 3. On the phone, open `https://<desktop>.<tailnet>.ts.net:8443` in Safari and add it to the home screen. In iOS Settings → VPN → Tailscale, turn on Connect On Demand.
-4. Open the installed app and tap "Enable notifications". Desktop notifications are then also sent to the phone while the desktop is locked or idle (see `push` in `settings.json`).
+4. Open the installed app and tap Enable when it offers notifications. Desktop notifications are then also sent to the phone while the desktop is locked or idle (see `push` in `settings.json`).
 
 Offline, the phone shows the board as of its last contact and queues writes and runs until the desktop is back. A desktop that sleeps stops serving: on a MacBook, enable "Prevent automatic sleeping on power adapter when the display is off".
 

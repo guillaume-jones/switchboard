@@ -2,7 +2,7 @@ import { Component, type ReactNode } from 'react'
 import * as bridge from './bridge'
 import type { LoadedCard } from './cards'
 
-const GRACE_MS = 10_000
+const GRACE_MS = 15_000
 
 type Props = { card: string; root?: boolean; loaded?: LoadedCard; previous?: () => ReactNode; children: ReactNode }
 

@@ -415,7 +415,12 @@ impl Shared {
     /// Re-resolves every active read against a new load, to be re-run on the new connections.
     pub(super) fn resolve_reads_again(&self, loaded: &Loaded) -> Vec<Refresh> {
         let mut refreshes = Vec::new();
-        for (key, active) in self.subscriptions.lock().unwrap().reads.iter_mut() {
+        let mut subscriptions = self.subscriptions.lock().unwrap();
+        for active in subscriptions.reads.values_mut() {
+            active.watching_rules.retain(|rule| loaded.rules.contains_key(rule));
+        }
+        subscriptions.reads.retain(|_, active| active.is_used());
+        for (key, active) in subscriptions.reads.iter_mut() {
             match resolve(loaded, &active.name, &active.params) {
                 Ok(read) => {
                     active.read = Some(Arc::new(read));

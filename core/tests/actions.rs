@@ -640,6 +640,23 @@ fn reload_with_a_changed_rule_definition_evaluates_the_new_one() {
 }
 
 #[test]
+fn removing_a_rule_with_the_view_it_watches_reports_no_error() {
+    let h = home(&[
+        ("sources/prs/views/open.sql", "SELECT id, title FROM prs.items"),
+        (
+            "rules/note.json",
+            r#"{"id": "note", "when": {"view": "prs_open"}, "key": "{id}", "into": "log.note", "args": {"key": "{title}"}}"#,
+        ),
+    ]);
+    let (engine, _rx) = open(h.path());
+    until(&engine, "core_rules", json!({"rule": "note"}), 5, |r| !r.is_empty());
+    fs::remove_file(h.path().join("rules/note.json")).unwrap();
+    fs::remove_file(h.path().join("sources/prs/views/open.sql")).unwrap();
+    until(&engine, "core_rules", json!({"rule": "note"}), 5, |r| r.is_empty());
+    assert_eq!(engine.query("core_events", json!({"kind": "error"})).unwrap(), json!([]));
+}
+
+#[test]
 fn dropping_the_engine_kills_running_commands() {
     let h = home(&[(
         "sources/prs/commands/hang",

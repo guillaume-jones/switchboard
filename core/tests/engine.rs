@@ -191,7 +191,7 @@ fn broken_edit_keeps_last_good_state_and_fix_reloads() {
     write(dir.path(), &[("sources/prs/views/items.sql", "SELECT id, title, state, nope FROM prs.items")]);
     let deadline = Instant::now() + Duration::from_secs(5);
     let errors = loop {
-        let errors = engine.query("core_events", json!({"kind": "error"})).unwrap();
+        let errors = engine.config()["errors"].clone();
         if !errors.as_array().unwrap().is_empty() || Instant::now() > deadline {
             break errors;
         }
@@ -201,7 +201,7 @@ fn broken_edit_keeps_last_good_state_and_fix_reloads() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|e| e["name"].as_str().unwrap().starts_with("sources/prs/views/items.sql:"))
+        .find(|e| e["path"].as_str().unwrap().starts_with("sources/prs/views/items.sql:"))
         .expect("error for the edited file");
     assert!(error["message"].as_str().unwrap().contains("no such column: nope"), "{errors}");
     assert_eq!(engine.query("prs_items", json!({})).unwrap(), json!([{"id": 1, "title": "x", "state": "open"}]));

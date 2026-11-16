@@ -21,6 +21,8 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+const LOAD_ERROR_GRACE: Duration = Duration::from_secs(15);
+
 /// Receives what the engine pushes to the shell: `rows`, `config`, `card` and `notify`.
 pub trait Emitter: Send + Sync {
     fn emit(&self, event: &str, payload: Value);
@@ -176,6 +178,7 @@ pub(crate) struct Shared {
     triggers: triggers::Triggers,
     loaded: RwLock<Arc<Loaded>>,
     load_errors: RwLock<Vec<Diagnostic>>,
+    reloads: AtomicU64,
     /// False while only the core source runs because the folder failed to load at startup.
     folder_loaded: AtomicBool,
     readers: Mutex<ReaderPool>,
@@ -290,14 +293,25 @@ impl Shared {
         self.refresh(refreshes);
     }
 
-    /// Swaps in a clean load of the folder; otherwise keeps the current one and reports the errors.
-    fn reload(&self, conn: &mut Connection) {
+    /// Swaps in a clean load of the folder; otherwise keeps the current one and reports the errors unless another reload
+    /// follows within LOAD_ERROR_GRACE, as while an agent is still editing.
+    fn reload(self: &Arc<Self>, conn: &mut Connection) {
+        let reload = self.reloads.fetch_add(1, SeqCst) + 1;
         let loaded = match load(&self.home, Mode::Apply) {
             Ok(loaded) => Arc::new(loaded),
             Err(diagnostics) => {
-                for d in diagnostics.iter().filter(|d| d.is_error()) {
-                    self.record(Event::error("loader", &d.path, d.message.clone()));
-                }
+                let errors: Vec<Event> = diagnostics
+                    .iter()
+                    .filter(|d| d.is_error())
+                    .map(|d| Event::error("loader", &d.path, d.message.clone()))
+                    .collect();
+                let shared = self.clone();
+                thread::spawn(move || {
+                    thread::sleep(LOAD_ERROR_GRACE);
+                    if shared.reloads.load(SeqCst) == reload {
+                        errors.into_iter().for_each(|e| shared.record(e));
+                    }
+                });
                 *self.load_errors.write().unwrap() = diagnostics;
                 self.emitter.emit("config", Value::Null);
                 return;
@@ -376,6 +390,7 @@ impl Engine {
             triggers: triggers::Triggers::new(tx.clone()),
             loaded: RwLock::new(loaded.clone()),
             load_errors: RwLock::new(load_errors.clone()),
+            reloads: AtomicU64::new(0),
             folder_loaded: AtomicBool::new(load_errors.is_empty()),
             readers: Mutex::default(),
             subscriptions: Mutex::default(),

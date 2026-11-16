@@ -10,6 +10,9 @@ export type LoadedCard = {
   /** Distinct per load, so a slot's error boundary resets when its card is reloaded. */
   generation: number
   component: Promise<CardComponent>
+  /** The version it replaced, which its slots keep showing for a while if this one fails. */
+  replaced?: { at: number; previous: LoadedCard }
+  failed?: boolean
 }
 
 const AsyncFunction = (async () => {}).constructor as FunctionConstructor
@@ -34,7 +37,10 @@ bridge.on('reconnect', () => {
 function refresh(name: string) {
   const next = fetchCard(name)
   const swap = () => {
-    if (next.generation < (cache.get(name)?.generation ?? 0)) return
+    const current = cache.get(name)
+    if (next.generation < (current?.generation ?? 0)) return
+    const previous = current?.failed ? current.replaced?.previous : current
+    if (previous) next.replaced = { at: Date.now(), previous: { ...previous, replaced: undefined } }
     cache.set(name, next)
     for (const listener of listeners) listener()
   }

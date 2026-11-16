@@ -232,7 +232,7 @@ fn load_scoped(home: &Path, mode: Mode, scope: Scope) -> Result<Loaded, Vec<Diag
         Scope::Folder => cards::read(home),
         Scope::CoreOnly => BTreeMap::new(),
     };
-    let cards = cards::bundle(&card_modules, &mut diags);
+    let cards = cards::bundle(&card_modules, mode, &mut diags);
     let card_names: BTreeSet<&str> = cards.keys().map(String::as_str).collect();
 
     let mut sources = BTreeMap::new();

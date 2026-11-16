@@ -30,7 +30,7 @@ const HELLO_WAIT_MS = 3000
 const AS_OF_KEY = 'switchboard.as_of'
 
 let status: Status = {
-  online: false,
+  online: true,
   asOf: Number(localStorage.getItem(AS_OF_KEY)) || undefined,
   outbox: [],
   push: 'unavailable',
@@ -42,7 +42,16 @@ function setStatus(next: Partial<Status>) {
   for (const listener of statusListeners) listener()
 }
 
+let offlineTimer = 0
+
+/** A dropped or new stream only counts as offline if the desktop has not answered within HELLO_WAIT_MS. */
+function reconnecting() {
+  offlineTimer ||= window.setTimeout(() => setStatus({ online: false }), HELLO_WAIT_MS)
+}
+
 function contact() {
+  clearTimeout(offlineTimer)
+  offlineTimer = 0
   const now = Date.now()
   localStorage.setItem(AS_OF_KEY, String(now))
   if (!status.online || now - (status.asOf ?? 0) > 1000) setStatus({ online: true, asOf: now })
@@ -227,7 +236,7 @@ function open() {
   }
   source.onerror = () => {
     client = ''
-    setStatus({ online: false })
+    reconnecting()
     if (source.readyState === EventSource.CLOSED) setTimeout(reopen, RETRY_MS)
   }
   current = source
@@ -308,6 +317,7 @@ const handlers: { [C in keyof Commands]: (args: Commands[C]['args']) => Promise<
 
 export function connect(): Backend {
   open()
+  reconnecting()
   loadOutbox()
   navigator.serviceWorker?.register('/sw.js')
   navigator.storage?.persist?.()

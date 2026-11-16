@@ -460,6 +460,19 @@ fn card_syntax_errors_have_line_and_column() {
 }
 
 #[test]
+fn applying_ships_a_broken_card_module_that_throws_its_errors() {
+    let h = home(&[
+        ("cards/Root.tsx", "import { x } from \"./lib/bad\"\nexport default () => x\n"),
+        ("cards/Other.tsx", "export default () => 1\n"),
+        ("cards/lib/bad.ts", "export const x: = 1\n"),
+    ]);
+    let l = load(h.path(), Mode::Apply).unwrap();
+    assert!(l.warnings.iter().any(|w| w.to_string() == "cards/lib/bad.ts:1:17: warning: Unexpected token"));
+    assert_eq!(l.cards["Root"]["lib/bad.ts"], "throw new Error(\"cards/lib/bad.ts:1:17: Unexpected token\")");
+    assert!(l.cards["Other"]["Other.tsx"].contains("() => 1"));
+}
+
+#[test]
 fn card_imports_are_restricted() {
     let h = home(&[
         (

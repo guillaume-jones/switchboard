@@ -95,7 +95,7 @@ fn count(app: &AppHandle, rows: &Value) {
     let n = rows.as_array().map_or(0, Vec::len);
     #[cfg(target_os = "macos")]
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.set_badge_count(Some(n as i64));
+        let _ = window.set_badge_count((n > 0).then_some(n as i64));
     }
     #[cfg(not(target_os = "macos"))]
     if let Some(tray) = app.tray_by_id("switchboard") {

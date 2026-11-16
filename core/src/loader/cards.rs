@@ -1,7 +1,7 @@
 //! Cards and `cards/lib/`, compiled with oxc from TypeScript and JSX into modules the webview evaluates.
 
-use super::Diagnostics;
 use super::sql_text::location;
+use super::{Diagnostics, Mode};
 use oxc::allocator::Allocator;
 use oxc::ast::{AstKind, ast};
 use oxc::codegen::Codegen;
@@ -45,8 +45,13 @@ pub(super) fn read(home: &Path) -> BTreeMap<String, String> {
     modules
 }
 
-/// Compiles every module and bundles each card with the lib modules it imports, directly or not.
-pub(super) fn bundle(modules: &BTreeMap<String, String>, diags: &mut Diagnostics) -> BTreeMap<String, CardBundle> {
+/// Compiles every module and bundles each card with the lib modules it imports, directly or not. When applying, a
+/// module that fails to compile only warns, and is replaced by one throwing its errors when a card evaluates it.
+pub(super) fn bundle(
+    modules: &BTreeMap<String, String>,
+    mode: Mode,
+    diags: &mut Diagnostics,
+) -> BTreeMap<String, CardBundle> {
     let names: BTreeSet<String> = modules.keys().cloned().collect();
     let mut compiled = BTreeMap::new();
     for (rel, text) in modules {
@@ -54,9 +59,19 @@ pub(super) fn bundle(modules: &BTreeMap<String, String>, diags: &mut Diagnostics
             Ok(module) => _ = compiled.insert(rel.as_str(), module),
             Err(errors) => {
                 let path = format!("cards/{rel}");
-                for (offset, message) in errors {
-                    diags.error(location(&path, text, offset), message);
-                }
+                let errors: Vec<String> = errors
+                    .into_iter()
+                    .map(|(offset, message)| {
+                        let at = location(&path, text, offset);
+                        match mode {
+                            Mode::Check => diags.error(&at, &message),
+                            Mode::Apply => diags.warn(&at, &message),
+                        }
+                        format!("{at}: {message}")
+                    })
+                    .collect();
+                let js = format!("throw new Error({})", serde_json::to_string(&errors.join("\n")).unwrap());
+                compiled.insert(rel.as_str(), CompiledModule { js, imports: Vec::new() });
             }
         }
     }

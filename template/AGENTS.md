@@ -20,7 +20,7 @@ sources/<name>/
   commands/*             executable scripts
   rules/*.json           rules
   files/                 anything else the commands need; not loaded
-data/                    git-ignored: <source>.db, logs/<run_id>.log, snapshots/, trash/, spool/
+data/                    git-ignored: <source>.db, runs/<run_id>/{out,err,exit}, snapshots/, trash/, spool/
 ```
 
 Any other entry in a source folder is an error. Runtime output goes to `data/` or a database, never `files/`.
@@ -69,18 +69,20 @@ Conventions: primary key on every table; provider JSON kept in `raw` and exposed
 | `max_per_hour`, `timeout` | per-rule overrides |
 | `log` | `false` skips the rule's `core_firings` rows and write events, for frequent triggers. Only without `when.view`; errors, blocked firings and runs are still recorded |
 
-Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started in an hour by a rule with `when.view` or `when.files`, the firing is blocked, recorded in `core_firings` and its key consumed; the rate limit also disables the rule until `core.rule_enable {rule}`. At most `max_concurrency` rule runs execute at once; others queue. Runs started by hand are never limited.
+Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started in an hour by a rule with `when.view` or `when.files`, the firing is blocked, recorded in `core_firings` and its key consumed; the rate limit also disables the rule until `core.rule_enable {rule}`. At most `max_concurrency` rule runs execute at once, not counting long-running ones; others queue. Runs started by hand are never limited.
 
 ## Commands
 
 - Run with the folder as cwd, in their own process group, with the login-shell environment plus `RUN_ID`, `SWITCHBOARD_HOME`, `SOURCE_DIR` (own source folder), `SWB`, and `SWB_ARG_<NAME>` per arg. Args are also on stdin as JSON.
 - Never open a database: read with `swb query`, write with `swb write`. `swb write` forwards `RUN_ID`, so writes by the command or anything it launched belong to its run.
-- Exit 0 is `success`, else `failure`. Unless the rule has `into`, a last stdout line `{"outcome": "success|failure|open", "summary": "..."}` overrides it. `open` runs are finished with `swb run finish $RUN_ID --ok|--fail [summary]` or become `unknown` after `open_run_expiry`.
-- Timeout: rule `timeout`, else `source.json` `timeouts.<command>`, else the setting; the process group is killed. Output goes to `data/logs/<run_id>.log` (1 MB cap); `into` payloads are capped at 16 MB.
+- Exit 0 is `success`, else `failure`; `swb run stop $RUN_ID` makes it `stopped`. Unless the rule has `into`, a last stdout line `{"outcome": "success|failure|open", "summary": "..."}` overrides it. `open` runs are finished with `swb run finish $RUN_ID --ok|--fail [summary]` or become `unknown` after `open_run_expiry`.
+- Timeout: rule `timeout`, else `source.json` `timeouts.<command>`, else the setting; the process group is killed. Stdout goes to `data/runs/<run_id>/out` (16 MB cap, which is also the `into` payload limit), stderr to `err` (1 MB cap).
+- Commands keep running when the app quits; the next start picks their runs back up.
+- Long-running (`source.json` `long_running`): no timeout, not counted against `max_concurrency`, stdin stays open after the args line, and each `swb run input $RUN_ID <text>` arrives as one more line. It runs until it exits or `swb run stop`; for a session or a connection kept warm across inputs, it should exit by itself once idle. Report progress with `swb write`, which is spooled while the app is closed.
 
 ## `source.json` and `settings.json`
 
-`source.json`: `item_card` (card for this source's refs, gets `ref` and `size`), `snapshot_interval`, `snapshot_retention` (seconds), `timeouts` (`{ "<command>": seconds }`), `queue_expiry` (`{ "<command>": seconds }`: how long a run queued offline on another device may wait; `0` refuses to queue it, for commands that only make sense right away).
+`source.json`: `item_card` (card for this source's refs, gets `ref` and `size`), `snapshot_interval`, `snapshot_retention` (seconds), `timeouts` (`{ "<command>": seconds }`), `queue_expiry` (`{ "<command>": seconds }`: how long a run queued offline on another device may wait; `0` refuses to queue it, for commands that only make sense right away), `long_running` (`["<command>"]`).
 
 `settings.json` (numbers are positive integers, seconds unless noted):
 
@@ -154,13 +156,15 @@ Exactly one of `command` (source, built-in, or shell: `palette.open`, `card.focu
 
 - `swb query core.timeline limit=50`, `core.events kind=error limit=20`, `core_events run_id=<run_id>`, `core_runs id=<run_id>`, `core_firings rule=<rule>`. Views exist only inside the running app.
 - Tables: `sqlite3 -readonly data/<source>.db`. Never write databases directly.
-- Command output: `data/logs/<run_id>.log`. Spool replay errors have `trigger = 'spool'`, card runtime errors `trigger = 'card_runtime'`.
+- Command output: `data/runs/<run_id>/out` and `err`; `exit` once it ended. Spool replay errors have `trigger = 'spool'`, card runtime errors `trigger = 'card_runtime'`.
 
 ```
 swb check
 swb write <source.writer> [name=value ...] [< payload]   values parsing as JSON are JSON; spooled if the app is closed
 swb query <view | source.query> [name=value ...]
 swb run finish <run_id> --ok|--fail [summary]
+swb run input <run_id> [text]                             one line, or stdin, to a long-running run
+swb run stop <run_id>
 ```
 
 ## Existing sources and cards

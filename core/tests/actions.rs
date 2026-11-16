@@ -1,4 +1,3 @@
-use switchboard_core::{Emitter, Engine, Origin, SystemEvent};
 use serde_json::{Value, json};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -6,6 +5,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
+use switchboard_core::{Emitter, Engine, Origin, SystemEvent};
 
 struct Events(Mutex<Sender<(String, Value)>>);
 
@@ -200,8 +200,8 @@ fn into_receives_stdout_and_args_reach_the_command() {
     assert_eq!(notes[1]["key"], r#"{"pr":7}"#);
     let run = until(&engine, "core_runs", json!({"rule": "fetch"}), 5, |r| r[0]["state"] == "success");
     assert_eq!(notes[0]["run_id"], run[0]["id"]);
-    let log = fs::read_to_string(h.path().join(format!("data/logs/{}.log", run[0]["id"].as_str().unwrap()))).unwrap();
-    assert!(log.contains(r#"["7", {"pr":7}]"#), "{log}");
+    let out = fs::read_to_string(h.path().join(format!("data/runs/{}/out", run[0]["id"].as_str().unwrap()))).unwrap();
+    assert!(out.contains(r#"["7", {"pr":7}]"#), "{out}");
 }
 
 #[test]
@@ -250,7 +250,7 @@ fn timeout_kills_the_process_group() {
     let run = until(&engine, "core_runs", json!({"id": id}), 5, |r| r[0]["state"] == "failure");
     assert_eq!(run[0]["summary"], "timed out after 1s");
     assert!(start.elapsed() < Duration::from_secs(3));
-    let log = fs::read_to_string(h.path().join(format!("data/logs/{id}.log"))).unwrap_or_default();
+    let log = fs::read_to_string(h.path().join(format!("data/runs/{id}/err"))).unwrap_or_default();
     let child: i32 =
         fs::read_to_string(h.path().join("child.pid")).unwrap_or_else(|e| panic!("{e}: {log}")).trim().parse().unwrap();
     std::thread::sleep(Duration::from_millis(100));
@@ -493,14 +493,15 @@ fn count(dir: &Path) -> usize {
 }
 
 #[test]
-fn logs_are_truncated_at_one_megabyte() {
-    let h = home(&[("sources/prs/commands/noisy", "#!/bin/sh\nhead -c 3000000 /dev/zero | tr '\\0' x\n")]);
+fn stderr_is_truncated_at_one_megabyte_and_empty_output_is_not_kept() {
+    let h = home(&[("sources/prs/commands/noisy", "#!/bin/sh\nhead -c 3000000 /dev/zero | tr '\\0' x >&2\n")]);
     let (engine, _rx) = open(h.path());
     let id = engine.run("prs.noisy", json!({}), card()).unwrap();
     until(&engine, "core_runs", json!({"id": id}), 10, |r| r[0]["state"] == "success");
-    let log = fs::read(h.path().join(format!("data/logs/{id}.log"))).unwrap();
-    assert!(log.len() > 1 << 20 && log.len() < (1 << 20) + 100, "{}", log.len());
-    assert!(log.ends_with(b"\n[log truncated at 1 MB]\n"));
+    let err = fs::read(h.path().join(format!("data/runs/{id}/err"))).unwrap();
+    assert!(err.len() > 1 << 20 && err.len() < (1 << 20) + 100, "{}", err.len());
+    assert!(err.ends_with(b"\n[truncated at 1 MB]\n"));
+    assert!(!h.path().join(format!("data/runs/{id}/out")).exists());
 }
 
 #[test]
@@ -657,19 +658,108 @@ fn removing_a_rule_with_the_view_it_watches_reports_no_error() {
 }
 
 #[test]
-fn dropping_the_engine_kills_running_commands() {
+fn a_command_outlives_the_engine_and_the_next_engine_records_its_exit() {
+    let h = home(&[(
+        "sources/prs/commands/wait",
+        "#!/bin/sh\necho $$ > \"$SWITCHBOARD_HOME/child.pid\"\nwhile [ ! -e \"$SWITCHBOARD_HOME/go\" ]; do sleep 0.05; done\necho '[\"after restart\"]'\n",
+    )]);
+    let (engine, _rx) = open(h.path());
+    let id = engine.run("prs.wait", json!({}), card()).unwrap();
+    let pid_file = h.path().join("child.pid");
+    wait_for("command start", 5, || fs::read_to_string(&pid_file).is_ok_and(|p| p.ends_with('\n')));
+    drop(engine);
+    let child: i32 = fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+    assert_eq!(unsafe { libc::kill(child, 0) }, 0, "the command outlived the engine");
+    fs::write(h.path().join("go"), "").unwrap();
+    wait_for("exit while the engine is down", 5, || h.path().join(format!("data/runs/{id}/exit")).exists());
+    let (engine, _rx) = open(h.path());
+    let run = until(&engine, "core_runs", json!({"id": id}), 5, |r| r[0]["state"] == "success");
+    assert_eq!(run[0]["summary"], Value::Null);
+    let id = engine.run("prs.wait", json!({}), card()).unwrap();
+    fs::remove_file(h.path().join("go")).unwrap();
+    fs::remove_file(&pid_file).unwrap();
+    wait_for("command start", 5, || fs::read_to_string(&pid_file).is_ok_and(|p| p.ends_with('\n')));
+    drop(engine);
+    let (engine, _rx) = open(h.path());
+    fs::write(h.path().join("go"), "").unwrap();
+    until(&engine, "core_runs", json!({"id": id}), 5, |r| r[0]["state"] == "success");
+}
+
+#[test]
+fn a_rule_run_adopted_after_a_restart_still_writes_into() {
+    let h = home(&[
+        (
+            "sources/prs/commands/wait",
+            "#!/bin/sh\ntouch \"$SWITCHBOARD_HOME/started\"\nwhile [ ! -e \"$SWITCHBOARD_HOME/go\" ]; do sleep 0.05; done\necho '[\"after restart\"]'\n",
+        ),
+        (
+            "rules/wait.json",
+            r#"{"id": "wait", "when": {"view": "prs_items"}, "key": "{id}", "run": "prs.wait", "into": "log.notes"}"#,
+        ),
+    ]);
+    let (engine, _rx) = open(h.path());
+    engine.write("prs.add", json!({"id": 1}), card()).unwrap();
+    wait_for("command start", 5, || h.path().join("started").exists());
+    drop(engine);
+    fs::write(h.path().join("go"), "").unwrap();
+    let (engine, _rx) = open(h.path());
+    let notes = until(&engine, "log_notes", json!({}), 5, |r| !r.is_empty());
+    assert_eq!(notes[0]["key"], "after restart");
+    until(&engine, "core_runs", json!({"rule": "wait"}), 5, |r| r[0]["state"] == "success");
+}
+
+#[test]
+fn stop_ends_a_run_and_its_process_group_as_stopped() {
     let h = home(&[(
         "sources/prs/commands/hang",
         "#!/bin/sh\nsleep 30 &\necho $! > \"$SWITCHBOARD_HOME/child.pid\"\nwait\n",
     )]);
     let (engine, _rx) = open(h.path());
-    engine.run("prs.hang", json!({}), card()).unwrap();
+    let id = engine.run("prs.hang", json!({}), card()).unwrap();
     let pid_file = h.path().join("child.pid");
     wait_for("command start", 5, || fs::read_to_string(&pid_file).is_ok_and(|p| p.ends_with('\n')));
     let child: i32 = fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
-    drop(engine);
+    engine.stop_run(&id).unwrap();
+    until(&engine, "core_runs", json!({"id": id}), 5, |r| r[0]["state"] == "stopped");
     std::thread::sleep(Duration::from_millis(100));
-    assert_ne!(unsafe { libc::kill(child, 0) }, 0, "the command's process group outlived the engine");
+    assert_ne!(unsafe { libc::kill(child, 0) }, 0, "the background child was stopped with the group");
+    assert!(engine.stop_run(&id).is_err(), "a stopped run cannot be stopped again");
+}
+
+#[test]
+fn long_running_commands_read_input_lines_and_do_not_count_against_concurrency() {
+    let h = home(&[
+        ("settings.json", r#"{"max_concurrency": 1}"#),
+        ("sources/prs/source.json", r#"{"long_running": ["serve"]}"#),
+        (
+            "sources/prs/commands/serve",
+            "#!/bin/sh\nwhile read -r line; do \"$SWB\" write log.note key=\"$line\"; done\n",
+        ),
+        ("sources/prs/commands/quick", "#!/bin/sh\n"),
+        (
+            "rules/serve.json",
+            r#"{"id": "serve", "when": {"view": "prs_items"}, "key": "{id}", "run": "prs.serve", "args": {"id": "{id}"}}"#,
+        ),
+        ("rules/quick.json", r#"{"id": "quick", "when": {"view": "prs_next"}, "key": "{id}", "run": "prs.quick"}"#),
+    ]);
+    let (engine, _rx) = open(h.path());
+    engine.write("prs.add", json!({"id": 1}), card()).unwrap();
+    let serve = until(&engine, "core_runs", json!({"rule": "serve"}), 5, |r| {
+        r.first().is_some_and(|r| r["state"] == "running")
+    });
+    let id = serve[0]["id"].as_str().unwrap();
+    until(&engine, "core_runs", json!({"rule": "quick"}), 5, |r| r.first().is_some_and(|r| r["state"] == "success"));
+    engine.input_run(id, "hello").unwrap();
+    engine.input_run(id, "second line\n").unwrap();
+    let notes = until(&engine, "log_notes", json!({}), 5, |r| r.len() == 3);
+    let keys: Vec<&str> = notes.iter().map(|n| n["key"].as_str().unwrap()).collect();
+    assert_eq!(keys, [r#"{"id":1}"#, "hello", "second line"], "the args line comes first");
+    assert_eq!(notes[1]["run_id"], id);
+    engine.stop_run(id).unwrap();
+    until(&engine, "core_runs", json!({"id": id}), 10, |r| r[0]["state"] == "stopped");
+    assert!(engine.input_run(id, "late").is_err());
+    let quick = engine.run("prs.quick", json!({}), card()).unwrap();
+    assert!(engine.input_run(&quick, "x").is_err(), "only long-running runs take input");
 }
 
 #[test]
@@ -799,11 +889,15 @@ fn file_rules_fire_on_changes_and_on_appended_matching_lines() {
     let h = home(&[
         (
             "rules/changed.json",
-            &format!(r#"{{"id": "changed", "when": {{"files": "{pattern}"}}, "into": "log.note", "args": {{"key": "changed"}}}}"#),
+            &format!(
+                r#"{{"id": "changed", "when": {{"files": "{pattern}"}}, "into": "log.note", "args": {{"key": "changed"}}}}"#
+            ),
         ),
         (
             "rules/errors.json",
-            &format!(r#"{{"id": "errors", "when": {{"files": "{pattern}", "line_contains": "ERROR"}}, "into": "log.note", "args": {{"key": "{{line}}"}}}}"#),
+            &format!(
+                r#"{{"id": "errors", "when": {{"files": "{pattern}", "line_contains": "ERROR"}}, "into": "log.note", "args": {{"key": "{{line}}"}}}}"#
+            ),
         ),
     ]);
     let (engine, _rx) = open(h.path());
@@ -830,7 +924,9 @@ fn line_rules_fire_while_a_file_is_appended_to_continuously() {
     let pattern = watched.path().join("*.log").display().to_string();
     let h = home(&[(
         "rules/errors.json",
-        &format!(r#"{{"id": "errors", "when": {{"files": "{pattern}", "line_contains": "ERROR"}}, "into": "log.note", "args": {{"key": "{{line}}"}}}}"#),
+        &format!(
+            r#"{{"id": "errors", "when": {{"files": "{pattern}", "line_contains": "ERROR"}}, "into": "log.note", "args": {{"key": "{{line}}"}}}}"#
+        ),
     )]);
     let (engine, _rx) = open(h.path());
     until(&engine, "core_rules", json!({"rule": "errors"}), 5, |r| r.len() == 1);
@@ -838,7 +934,8 @@ fn line_rules_fire_while_a_file_is_appended_to_continuously() {
     let start = std::time::Instant::now();
     for k in 0.. {
         let line = format!("ERROR {k}\n");
-        std::io::Write::write_all(&mut fs::OpenOptions::new().append(true).open(&log).unwrap(), line.as_bytes()).unwrap();
+        std::io::Write::write_all(&mut fs::OpenOptions::new().append(true).open(&log).unwrap(), line.as_bytes())
+            .unwrap();
         std::thread::sleep(Duration::from_millis(50));
         if !engine.query("log_notes", json!({})).unwrap().as_array().unwrap().is_empty() {
             break;
@@ -850,7 +947,9 @@ fn line_rules_fire_while_a_file_is_appended_to_continuously() {
 #[test]
 fn system_rules_fire_and_offline_waits_for_its_debounce() {
     let rule = |event: &str| {
-        format!(r#"{{"id": "{event}", "when": {{"system": "{event}"}}, "into": "log.note", "args": {{"key": "{{event}}"}}}}"#)
+        format!(
+            r#"{{"id": "{event}", "when": {{"system": "{event}"}}, "into": "log.note", "args": {{"key": "{{event}}"}}}}"#
+        )
     };
     let (wake, offline, online) = (rule("wake"), rule("offline"), rule("online"));
     let h = home(&[
@@ -915,8 +1014,11 @@ fn unlogged_file_rules_with_runs_are_rate_limited_by_their_runs() {
     let (engine, _rx) = open(h.path());
     until(&engine, "core_rules", json!({"rule": "errors"}), 5, |r| r.len() == 1);
     std::thread::sleep(Duration::from_millis(300));
-    std::io::Write::write_all(&mut fs::OpenOptions::new().append(true).open(&log).unwrap(), b"ERROR 1\nERROR 2\nERROR 3\n")
-        .unwrap();
+    std::io::Write::write_all(
+        &mut fs::OpenOptions::new().append(true).open(&log).unwrap(),
+        b"ERROR 1\nERROR 2\nERROR 3\n",
+    )
+    .unwrap();
     let rules = until(&engine, "core_rules", json!({"rule": "errors"}), 5, |r| r[0]["enabled"] == 0);
     assert_eq!(rules[0]["disabled_reason"], "max_per_hour 2 exceeded");
     assert_eq!(engine.query("core_runs", json!({"rule": "errors"})).unwrap().as_array().unwrap().len(), 2);

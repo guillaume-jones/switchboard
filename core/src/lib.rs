@@ -5,11 +5,11 @@ mod runner;
 mod socket;
 
 pub use engine::{Emitter, Engine, Origin};
-pub use maintenance::{Template, init};
 pub use loader::{
     Action, BUILTINS, CardBundle, Diagnostic, FileWatch, Level, Loaded, Mode, Rule, SHELL_COMMANDS, Select, Settings,
     Source, SourceConfig, Statement, SystemEvent, Trigger, Watch, Writer, load,
 };
+pub use maintenance::{Template, init};
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -27,13 +27,22 @@ pub fn home() -> PathBuf {
 /// The `swb` CLI: `$SWITCHBOARD_SWB`, else next to this executable or in its parent directory (the app bundle or
 /// Cargo's target directory), else on `PATH`.
 pub(crate) fn swb_binary() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("SWITCHBOARD_SWB") {
+    sibling_binary("swb", "SWITCHBOARD_SWB")
+}
+
+/// `swb-hold`, which holds each run: found like `swb`, with `$SWITCHBOARD_HOLD`.
+pub(crate) fn hold_binary() -> Option<PathBuf> {
+    sibling_binary("swb-hold", "SWITCHBOARD_HOLD")
+}
+
+fn sibling_binary(name: &str, var: &str) -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os(var) {
         return Some(path.into());
     }
     let exe = std::env::current_exe().ok();
     let beside_exe = exe.iter().flat_map(|e| e.ancestors().skip(1).take(2).map(Path::to_path_buf));
     let on_path = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default();
-    beside_exe.chain(on_path).map(|dir| dir.join("swb")).find(|p| p.is_file())
+    beside_exe.chain(on_path).map(|dir| dir.join(name)).find(|p| p.is_file())
 }
 
 /// A directory's entries as (file name, path), sorted by name, without hidden files. Empty if it cannot be read.

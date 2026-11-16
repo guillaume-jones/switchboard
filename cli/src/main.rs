@@ -1,10 +1,10 @@
-use switchboard_core::{Mode, Template, home, init, load};
 use serde_json::{Map, Value, json};
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 use std::time::SystemTime;
 use std::{env, fs};
+use switchboard_core::{Mode, Template, home, init, load};
 
 const USAGE: &str = "usage:
   swb init [<git url> [--copy | -c]] [--force | -f]
@@ -18,6 +18,10 @@ const USAGE: &str = "usage:
       Print the rows as a JSON array.
   swb run finish <run_id> --ok|--fail [summary]
       Finish an open run.
+  swb run input <run_id> [text]
+      Write a line, or stdin, to a long-running run's stdin.
+  swb run stop <run_id>
+      Stop a run: SIGTERM to its process group, SIGKILL 5s later. It ends as stopped.
 
 Values that parse as JSON (4812, true, [1], {\"a\":1}) are passed as JSON, anything else as text.";
 
@@ -41,7 +45,9 @@ fn main() -> ExitCode {
         ["init", rest @ ..] => {
             let flag = |names: [&str; 2]| rest.iter().any(|a| names.contains(a));
             let urls: Vec<&str> = rest.iter().copied().filter(|a| !a.starts_with('-')).collect();
-            if urls.len() > 1 || rest.len() - urls.len() > usize::from(flag(["--force", "-f"])) + usize::from(flag(["--copy", "-c"])) {
+            if urls.len() > 1
+                || rest.len() - urls.len() > usize::from(flag(["--force", "-f"])) + usize::from(flag(["--copy", "-c"]))
+            {
                 return fail(USAGE, 2);
             }
             let template = match (urls.first(), flag(["--copy", "-c"])) {
@@ -93,6 +99,11 @@ fn main() -> ExitCode {
             let summary = (!summary.is_empty()).then(|| summary.join(" "));
             json!({ "op": "finish", "run_id": id, "ok": *flag == "--ok", "summary": summary })
         }
+        ["run", "input", id, text @ ..] => {
+            let text = (!text.is_empty()).then(|| text.join(" "));
+            json!({ "op": "input", "run_id": id, "text": text })
+        }
+        ["run", "stop", id] => json!({ "op": "stop", "run_id": id }),
         ["--help" | "-h" | "help"] => {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -105,6 +116,12 @@ fn main() -> ExitCode {
         let piped = !std::io::stdin().is_terminal() && std::io::stdin().read_to_string(&mut text).is_ok();
         (piped && !text.is_empty()).then_some(text)
     };
+    if request["op"] == "input" && request["text"].is_null() {
+        match stdin() {
+            Some(text) => request["text"] = text.into(),
+            None => return fail("swb run input: give the text as arguments or on stdin", 2),
+        }
+    }
     let spool = |mut request: Value, why: &str| {
         if let Some(text) = stdin() {
             request["stdin"] = text.into();

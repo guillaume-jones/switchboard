@@ -88,6 +88,8 @@ pub(crate) enum ExitState {
     Failure,
     /// Still in progress outside the engine, until `swb run finish`.
     Open,
+    /// Stopped by `swb run stop`.
+    Stopped,
 }
 
 impl ExitState {
@@ -96,6 +98,7 @@ impl ExitState {
             ExitState::Success => "success",
             ExitState::Failure => "failure",
             ExitState::Open => "open",
+            ExitState::Stopped => "stopped",
         }
     }
 
@@ -106,9 +109,16 @@ impl ExitState {
 
 /// A run being executed, which the tick must not mark as lost.
 pub(crate) enum Child {
-    Process(u32),
+    /// Held by `swb-hold` with this pid; `input` serialises writes to its stdin.
+    Process { pid: u32, input: Arc<Mutex<()>> },
     /// Nothing left to kill: a builtin, or a command that exited and whose result is being recorded.
     InEngine,
+}
+
+impl Child {
+    pub(crate) fn process(pid: u32) -> Child {
+        Child::Process { pid, input: Arc::default() }
+    }
 }
 
 /// Reports a run's exit to the writer thread exactly once: as a failure if the thread running it panics first.
@@ -273,6 +283,23 @@ impl Shared {
         }
     }
 
+    pub(crate) fn input_run(&self, run_id: &str, text: &str) -> Result<()> {
+        crate::runner::input(self, run_id, text)
+    }
+
+    /// Stops a running command through its holder, or a queued run before it starts.
+    pub(crate) fn stop_run(&self, run_id: &str) -> Result<()> {
+        if crate::runner::stop(self, run_id)? {
+            return Ok(());
+        }
+        let params = json!({ "id": run_id, "state": ExitState::Stopped.as_str(), "summary": null });
+        let origin = Origin { trigger: "swb".into(), run_id: Some(run_id.into()) };
+        match self.write("core.run_exit", params, origin)? {
+            0 => bail!("run {run_id} is not running or queued"),
+            _ => Ok(()),
+        }
+    }
+
     /// Registers the rules' views as active reads, evaluates them, watches their files, and records the rule set in
     /// `core.rules`.
     fn sync_rules(&self, loaded: &Loaded) {
@@ -362,6 +389,10 @@ impl Engine {
         };
         let loaded = Arc::new(loaded);
         let conn = connect(&loaded, Access::ReadWrite)?;
+        let held: Vec<(String, Option<u32>, Option<String>)> = conn
+            .prepare("SELECT id, pid, rule FROM core.runs WHERE state = 'running'")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
 
         let socket = home.join("data/swb.sock");
         let _ = fs::remove_file(&socket);
@@ -402,6 +433,10 @@ impl Engine {
         });
         for d in load_errors.iter().filter(|d| d.is_error()) {
             shared.record(Event::error("loader", &d.path, d.message.clone()));
+        }
+        for (id, pid, rule) in held {
+            let into = crate::runner::PayloadWriter::of(rule.and_then(|r| loaded.rules.get(&r)));
+            crate::runner::adopt(&shared, id, pid, into);
         }
         let mut threads = Vec::new();
         let writer = writes::WriteLoop::new(shared.clone(), conn);
@@ -471,6 +506,15 @@ impl Engine {
 
     pub fn finish_run(&self, run_id: &str, ok: bool, summary: Option<&str>) -> Result<()> {
         self.shared.finish_run(run_id, ok, summary)
+    }
+
+    /// Writes a line to a long-running run's stdin.
+    pub fn input_run(&self, run_id: &str, text: &str) -> Result<()> {
+        self.shared.input_run(run_id, text)
+    }
+
+    pub fn stop_run(&self, run_id: &str) -> Result<()> {
+        self.shared.stop_run(run_id)
     }
 
     /// What the shell needs to render: the root card, the palette entries, key bindings and load errors.
@@ -564,13 +608,9 @@ impl Drop for Engine {
         self.shared.stopping.store(true, SeqCst);
         let _ = self.shared.tx.send(Message::Stop);
         self.stop_ticker.take();
-        // Wakes the socket thread, blocked in accept, so it sees `stopping`.
+        // Wakes the socket thread, blocked in accept, so it sees `stopping`. Running commands keep running under
+        // their holders, for the next engine to adopt.
         let _ = UnixStream::connect(self.shared.home.join("data/swb.sock"));
-        for child in self.shared.children.lock().unwrap().values() {
-            if let Child::Process(pid) = child {
-                crate::kill_process_group(*pid);
-            }
-        }
         for thread in self.threads.drain(..) {
             let _ = thread.join();
         }

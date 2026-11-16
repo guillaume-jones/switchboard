@@ -14,7 +14,7 @@ ifeq ($(OS),Darwin)
 	rm -rf /Applications/Switchboard.app
 	cp -R target/release/bundle/macos/Switchboard.app /Applications/
 else
-	install -Dm 755 -t $(HOME)/.local/bin target/release/switchboard target/release/swb
+	install -Dm 755 -t $(HOME)/.local/bin target/release/switchboard target/release/swb target/release/swb-hold
 	install -Dm 644 app/src-tauri/icons/128x128.png $(HOME)/.local/share/icons/hicolor/128x128/apps/switchboard.png
 	mkdir -p $(HOME)/.local/share/applications
 	printf '[Desktop Entry]\nType=Application\nName=Switchboard\nExec=$(HOME)/.local/bin/switchboard\nIcon=switchboard\nCategories=Utility;\n' \
@@ -39,9 +39,10 @@ check: sidecar | app/node_modules
 	app/node_modules/.bin/oxfmt --check app template/cards
 
 sidecar:
-	cargo build --release -p switchboard-cli
+	cargo build --release -p switchboard-cli -p switchboard-core --bin swb --bin swb-hold
 	mkdir -p app/src-tauri/binaries
 	cp target/release/swb app/src-tauri/binaries/swb-$(TRIPLE)
+	cp target/release/swb-hold app/src-tauri/binaries/swb-hold-$(TRIPLE)
 
 app/node_modules:
 	cd app && npm ci

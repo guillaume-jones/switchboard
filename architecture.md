@@ -37,7 +37,7 @@ sources/<name>/
   commands/*             scripts that fetch or act
   rules/*.json           rules that belong to this source
   files/                 config and helpers for its commands; committed, not loaded
-data/                    <source>.db (WAL), logs/, snapshots/, trash/, spool/, swb.sock, engine.lock
+data/                    <source>.db (WAL), runs/, snapshots/, trash/, spool/, swb.sock, engine.lock
 AGENTS.md                what agents need to maintain the folder
 ```
 
@@ -97,7 +97,7 @@ Source names are `[a-z][a-z0-9]*` (no `_`, since views are `<source>_<file>`). A
 - **Views** are one parameterless `SELECT`, registered as temp views on the engine's connections (so they exist only inside the app; `swb query` reads them from outside). They read their own source's tables and any views. Their columns are their contract. `now` is evaluated only when the view re-runs, which is after a dependent write or on a rule's schedule.
 - **Queries** are parameterised `SELECT`s for what a view plus equality filters cannot express. Not joinable, not watchable by rules.
 - **Writers** are one or more statements run in one savepoint, with named params, writing only their own source. Bulk input arrives as JSON in `:payload`; `:run_id` is bound to the calling run.
-- **Commands** are scripts that take IDs and look up the rest with `swb query`. They never open a database. A fetching command prints JSON and its rule's `into` writer stores it. They run with the folder as cwd, in their own process group, with the login-shell environment captured once at start, `RUN_ID`, `SWITCHBOARD_HOME`, `SOURCE_DIR`, `SWB` and `SWB_ARG_<NAME>` (args are also JSON on stdin), `swb`'s folder first on `PATH`, a timeout (setting, `source.json` or rule), and output in `data/logs/<run_id>.log`. Agent launches are ordinary commands: wait on `<agent> -p` and exit with its result, or detach, exit `open`, and finish later.
+- **Commands** are scripts that take IDs and look up the rest with `swb query`. They never open a database. A fetching command prints JSON and its rule's `into` writer stores it. They run with the folder as cwd, in their own process group, with the login-shell environment captured once at start, `RUN_ID`, `SWITCHBOARD_HOME`, `SOURCE_DIR`, `SWB` and `SWB_ARG_<NAME>` (args are also JSON on stdin), `swb`'s folder first on `PATH`, a timeout (setting, `source.json` or rule), and stdout and stderr in `data/runs/<run_id>/out` and `err`. Agent launches are ordinary commands: wait on `<agent> -p` and exit with its result, or detach, exit `open`, and finish later. A command listed in `source.json` `long_running` has no timeout, keeps its stdin open after the args line for `swb run input`, and does not count against `max_concurrency`: it runs until it exits or `swb run stop`, so it can hold a connection, such as an agent session, across many inputs.
 - **Portability:** a source is self-contained; copying its folder in and passing `swb check` installs it. Its files contain its own name, so it cannot be renamed without editing them. Rules start firing as soon as it loads.
 
 ## Rules
@@ -135,7 +135,7 @@ flowchart LR
 
 - **Write path:** one writer connection with every source DB attached and every view as a temp view. Each loop iteration drains all pending messages into one transaction (group commit), then starts queued runs, writes buffered events, commits and replies.
 - **Invalidation:** when the loader prepares a view or query, SQLite's authorizer reports every base table it reads, through any depth of views; writers report the tables they write. After a commit, every active read (subscribed by a card or watched by a rule) whose tables intersect the dirty set is queued for the refresh thread, which re-runs it so the writer never waits on a read. Queued refreshes run in order, and each read runs once for everything queued while the previous pass ran, so a slow read updates less often instead of slowing writes. Only a changed result hash is pushed to cards or evaluated by rules. Granularity is per table, and a whole result is re-sent when it changes.
-- **Runner:** spawns command processes, enforces timeouts by killing the process group, captures stdout for `into` and the outcome line, and reports the exit back to the writer thread. The tick marks `running` runs whose process is gone and expired `open` runs as `unknown`, and trims events and runs past `retention`.
+- **Runner:** every command runs under `swb-hold`, a small std-only binary started in its own process group, which starts the command in another, copies its stdout to `data/runs/<run_id>/out` (16 MB cap) and stderr to `err` (1 MB cap), kills its group on timeout, stops it on SIGTERM (`swb run stop`: SIGTERM to the group, SIGKILL 5 s later), and writes `exit` (code, signal, reason) last. For a long-running command, stdin is the FIFO `in`, which `swb run input` writes one line at a time. The holder keeps the run folder `flock`ed while it lives and does not depend on the engine: quitting the app leaves runs running, and the next engine adopts each `running` run by waiting on that lock, then records the exit, `into` payload and outcome line as if it had never stopped. The tick marks `running` runs with neither a holder nor a process as `unknown`, and expired `open` runs too, and trims events, runs and run folders past `retention`.
 - **Reload:** file changes (debounced 100 ms; `data/`, `.git` and `switchboard.d.ts` ignored) re-run the loader. Only a clean load is swapped in: connections are rebuilt, subscriptions re-resolved, rules re-synced, and changed cards pushed for hot reload; the app swaps a card in once its new version has loaded, so it neither blanks nor drops its subscriptions. Otherwise the last good state keeps running, and the errors go to `core_events` unless another reload follows within 15 s. A card module that fails to compile does not fail the load (only `swb check`): it is shipped as a module throwing its errors, so only cards in use surface them. A card version that fails within 15 s of replacing a working one, as while an agent is still editing it, shows the previous version until then; only then is its error shown and reported to `core_events` as `card_runtime`. If the folder fails at startup, the app runs the `core` source alone.
 - **Socket:** `data/swb.sock` serves `swb`. On start, `data/spool/` is replayed in order before accepting connections.
 - **Wrapper (Tauri):** one IPC command, `call`, for the shell (shared with other devices, below), `core.notify` as desktop notifications (clicking brings the window forward), the row count of the `badge` view as the dock badge on macOS or in the tray on Linux (whose menu shows or quits the app), the global `hotkey` (X11 only on Linux), and closing the window hides it. On macOS it offers once to link `swb` into `/usr/local/bin`, which takes an admin password; declining is remembered. One instance per folder, enforced by `data/engine.lock`; on Linux, launching the app again for the same folder shows the running window instead.
@@ -156,7 +156,8 @@ Embedded in the binary, written only by the engine, and the only source whose sc
 
 - **`runs`:** id (a UUID, chosen by the engine or by a device that queued the run offline; order is `created_at`), command, args, state, parent, depth, rule, pid, summary, commit, timestamps.
   ```
-  queued → running → success | failure | open
+  queued → running → success | failure | open | stopped
+  queued → stopped              (swb run stop)
   open → success | failure      (swb run finish, core.run_finish, or a rule)
   running → unknown             (process gone)
   open → unknown                (open_run_expiry)
@@ -188,6 +189,8 @@ Talks to the app over `data/swb.sock`.
 - `swb write <source.writer> [name=value ...] [< payload]`: spooled to `data/spool/` if the app is closed; at-least-once.
 - `swb query <view | source.query> [name=value ...]`
 - `swb run finish <run_id> --ok|--fail [summary]`
+- `swb run input <run_id> [text]`: one line, or stdin, to a long-running run.
+- `swb run stop <run_id>`
 - `swb check`
 - `swb init [<git url> [--copy | -c]] [--force | -f]`: replaces the folder with a clone of the URL that keeps it as `origin` (to pull the template's updates; it ignores `data/` and `cards/switchboard.d.ts` through `.git/info/exclude`), a new repository with the URL's files given `--copy`, or the built-in template without a URL, which is also how the app creates a missing folder. The new folder is built next to the old one and swapped in once complete. Without `--force`, only a missing folder or one still at its first commit with no changes; never while the app holds `data/engine.lock`.
 

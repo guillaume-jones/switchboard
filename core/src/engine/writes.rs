@@ -518,11 +518,12 @@ impl Batch<'_> {
     /// Starts queued runs, keeping at most `max_concurrency` rule runs running (`core.notify` is exempt).
     fn start_queued(&mut self, restores: &mut Vec<(String, Value)>) -> Result<()> {
         let max_concurrency = i64::from(self.loaded.settings.max_concurrency);
-        let mut running: i64 = self.conn.query_row(
-            "SELECT count(*) FROM core.runs WHERE state = 'running' AND rule IS NOT NULL",
-            [],
-            |r| r.get(0),
-        )?;
+        let running: Vec<String> = self
+            .conn
+            .prepare_cached("SELECT command FROM core.runs WHERE state = 'running' AND rule IS NOT NULL")?
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut running = running.iter().filter(|c| !self.loaded.is_long_running(c)).count() as i64;
         let queued: Vec<QueuedRun> = self
             .conn
             .prepare_cached(
@@ -532,7 +533,8 @@ impl Batch<'_> {
             .collect::<rusqlite::Result<_>>()?;
         for QueuedRun { id, command, args, rule } in queued {
             let builtin = Builtin::parse(&command);
-            if rule.is_some() && builtin != Some(Builtin::Notify) {
+            let long_running = self.loaded.is_long_running(&command);
+            if rule.is_some() && builtin != Some(Builtin::Notify) && !long_running {
                 if running >= max_concurrency {
                     continue;
                 }
@@ -597,13 +599,13 @@ impl Batch<'_> {
                         .and_then(|r| r.timeout)
                         .or_else(|| self.loaded.sources.get(source).and_then(|s| s.config.timeouts.get(name).copied()))
                         .unwrap_or(self.loaded.settings.timeout);
-                    let into = rule.and_then(|r| match &r.action {
-                        Action::Run { into: Some(writer), .. } => {
-                            Some(PayloadWriter { writer: writer.clone(), trigger: format!("rule:{}", r.id) })
-                        }
-                        _ => None,
-                    });
-                    let job = Job { id: id.clone(), path: path.clone(), args, timeout, into };
+                    let job = Job {
+                        id: id.clone(),
+                        path: path.clone(),
+                        args,
+                        timeout: (!long_running).then_some(timeout),
+                        into: PayloadWriter::of(rule),
+                    };
                     match crate::runner::spawn(self.shared, job) {
                         Ok(pid) => _ = self.core_write("run_start", json!({ "id": id, "pid": pid }))?,
                         Err(e) => {
@@ -673,6 +675,7 @@ impl Batch<'_> {
             .query_map([before], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         for id in trimmed {
+            let _ = fs::remove_dir_all(crate::runner::run_dir(&self.shared.home, &id));
             let _ = fs::remove_file(self.shared.home.join(format!("data/logs/{id}.log")));
         }
         self.core_write(

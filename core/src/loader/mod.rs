@@ -106,6 +106,14 @@ pub struct Loaded {
     pub warnings: Vec<Diagnostic>,
 }
 
+impl Loaded {
+    /// Whether `source.command` is listed in its source's `long_running`.
+    pub fn is_long_running(&self, command: &str) -> bool {
+        let (source, name) = command.split_once('.').unwrap_or((command, ""));
+        self.sources.get(source).is_some_and(|s| s.config.long_running.contains(name))
+    }
+}
+
 #[derive(Debug)]
 pub struct Source {
     /// `data/<source>.db`, for a source with a `schema.sql`.

@@ -1,32 +1,33 @@
-//! Runs commands: each in its own process group with the login-shell environment, a timeout, output logged to
-//! `data/logs/<run_id>.log`, and stdout captured for `into` or for the outcome line.
+//! Runs commands, each held by `swb-hold` in `data/runs/<run_id>/`: in its own process group with the login-shell
+//! environment, a timeout, stdout in `out` and stderr in `err`. The holder outlives the engine, so a run started
+//! before a restart is adopted by the next engine and finishes normally.
 
 use crate::engine::{Child, Event, ExitReport, ExitState, Origin, Shared, display_text};
-use anyhow::Result;
+use crate::loader::{Action, Rule};
+use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value};
-use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::sync::mpsc::channel;
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-const LOG_CAP: usize = 1 << 20;
-/// Without `into`, only the end of stdout is kept, for the outcome line.
-const TAIL: usize = 64 << 10;
-const PAYLOAD_CAP: usize = 16 << 20;
+/// Without `into`, only the end of stdout is read, for the outcome line.
+const TAIL: u64 = 64 << 10;
 const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long to wait for output after the process exits, in case something it started keeps the pipes open.
-const DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub(crate) struct Job {
     pub id: String,
     pub path: PathBuf,
     pub args: Value,
-    pub timeout: Duration,
+    /// `None` for a long-running command, which also keeps its stdin open for `swb run input`.
+    pub timeout: Option<Duration>,
     pub into: Option<PayloadWriter>,
 }
 
@@ -34,6 +35,22 @@ pub(crate) struct Job {
 pub(crate) struct PayloadWriter {
     pub writer: String,
     pub trigger: String,
+}
+
+impl PayloadWriter {
+    /// The rule's `into`, if it runs a command.
+    pub(crate) fn of(rule: Option<&Rule>) -> Option<PayloadWriter> {
+        rule.and_then(|r| match &r.action {
+            Action::Run { into: Some(writer), .. } => {
+                Some(PayloadWriter { writer: writer.clone(), trigger: format!("rule:{}", r.id) })
+            }
+            _ => None,
+        })
+    }
+}
+
+pub(crate) fn run_dir(home: &Path, id: &str) -> PathBuf {
+    home.join("data/runs").join(id)
 }
 
 /// The environment of a login shell, captured once, so commands see the user's `PATH` even when the app is
@@ -69,17 +86,25 @@ pub(crate) fn login_env(shared: &Shared) -> Vec<(String, String)> {
     }
 }
 
-/// Starts the command and supervises it on its own thread, which reports the exit to the writer thread.
+/// Starts the command under its holder, and waits for the holder on its own thread, which reports the exit to the
+/// writer thread.
 pub(crate) fn spawn(shared: &Arc<Shared>, job: Job) -> Result<u32> {
     let home = &shared.home;
+    let hold = crate::hold_binary().ok_or_else(|| anyhow!("swb-hold not found next to the app or on PATH"))?;
     let env = shared.login_env.get_or_init(|| login_env(shared));
     let mut path = env.iter().find(|(k, _)| k == "PATH").map(|(_, v)| v.clone()).unwrap_or_default();
     let swb = crate::swb_binary();
     if let Some(dir) = swb.as_deref().and_then(Path::parent) {
         path = format!("{}:{path}", dir.display());
     }
-    let mut command = Command::new(&job.path);
+    let dir = run_dir(home, &job.id);
+    fs::create_dir_all(&dir)?;
+    let mut command = Command::new(hold);
     command
+        .arg(&dir)
+        .arg(job.timeout.map_or(0, |t| t.as_secs().max(1)).to_string())
+        .arg(if job.timeout.is_none() { "1" } else { "0" })
+        .arg(&job.path)
         .env_clear()
         .envs(env.iter().cloned())
         .env("PATH", path)
@@ -88,8 +113,8 @@ pub(crate) fn spawn(shared: &Arc<Shared>, job: Job) -> Result<u32> {
         .env("SOURCE_DIR", job.path.ancestors().nth(2).unwrap_or(home))
         .current_dir(home)
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .process_group(0);
     if let Some(swb) = swb {
         command.env("SWB", swb);
@@ -99,154 +124,123 @@ pub(crate) fn spawn(shared: &Arc<Shared>, job: Job) -> Result<u32> {
             name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' }).collect();
         command.env(format!("SWB_ARG_{name}"), display_text(value));
     }
-    // A command file that was just written may still be open for writing, which exec refuses for a moment.
-    let mut retries = 0;
-    let mut child = loop {
-        match command.spawn() {
-            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && retries < 10 => {
-                retries += 1;
-                thread::sleep(Duration::from_millis(20));
-            }
-            spawned => break spawned?,
-        }
-    };
+    let mut child = command.spawn()?;
     let pid = child.id();
-    shared.children.lock().unwrap().insert(job.id.clone(), Child::Process(pid));
-    let stdin = child.stdin.take().expect("stdin is piped");
-    let stdout = child.stdout.take().expect("stdout is piped");
-    let stderr = child.stderr.take().expect("stderr is piped");
-    let _ = fs::create_dir_all(home.join("data/logs"));
-    let log = File::create(home.join(format!("data/logs/{}.log", job.id))).ok();
-    let log = Arc::new(Mutex::new(RunLog { file: log, written: 0, truncated: false }));
+    shared.children.lock().unwrap().insert(job.id.clone(), Child::process(pid));
+    let mut stdin = child.stdin.take().expect("stdin is piped");
+    let args = job.args.to_string();
+    // On its own thread: a command that never reads stdin must not block the writer thread.
+    thread::spawn(move || _ = stdin.write_all(args.as_bytes()));
     let shared = shared.clone();
     thread::spawn(move || {
-        let report = ExitReport::new(&shared, job.id.clone());
-        let args = job.args.to_string();
-        // On its own thread: a command that never reads stdin must not keep its timeout from being enforced.
-        thread::spawn(move || {
-            let mut stdin = stdin;
-            let _ = stdin.write_all(args.as_bytes());
-        });
-        let captured = Arc::new(Mutex::new(Captured::default()));
-        let capture = if job.into.is_some() { Capture::Payload } else { Capture::Tail };
-        let (pumped, drained) = channel();
-        let (log_out, pumped_out, captured_out) = (log.clone(), pumped.clone(), captured.clone());
-        thread::spawn(move || {
-            pump(stdout, &log_out, Some((&captured_out, capture)));
-            let _ = pumped_out.send(());
-        });
-        thread::spawn(move || {
-            pump(stderr, &log, None);
-            let _ = pumped.send(());
-        });
-        let (exited, status) = channel();
-        thread::spawn(move || _ = exited.send(child.wait()));
-        let status = match status.recv_timeout(job.timeout) {
-            Ok(status) => status.ok(),
-            Err(_) => {
-                crate::kill_process_group(pid);
-                let _ = status.recv();
-                None
-            }
-        };
-        // Its process group may be reused from now on, so the engine must not kill it.
-        shared.children.lock().unwrap().insert(job.id.clone(), Child::InEngine);
-        for _ in 0..2 {
-            let _ = drained.recv_timeout(DRAIN_TIMEOUT);
-        }
-        let (stdout, overflowed) = {
-            let captured = captured.lock().unwrap();
-            (String::from_utf8_lossy(&captured.bytes).into_owned(), captured.overflowed)
-        };
-        let (mut state, mut summary) = match status {
-            None => (ExitState::Failure, Some(format!("timed out after {}s", job.timeout.as_secs()))),
-            Some(s) if s.success() => (ExitState::Success, None),
-            Some(s) => (ExitState::Failure, Some(format!("exited with {s}"))),
-        };
-        match &job.into {
-            None if status.is_some() => {
-                let last_line = stdout.lines().rev().find(|l| !l.trim().is_empty());
-                let outcome = last_line.and_then(|l| serde_json::from_str::<Value>(l).ok());
-                if let Some(refined) = outcome.as_ref().and_then(|o| o["outcome"].as_str()).and_then(ExitState::parse) {
-                    state = refined;
-                }
-                if let Some(s) = outcome.as_ref().and_then(|o| o["summary"].as_str()) {
-                    summary = Some(s.to_string());
-                }
-            }
-            None => {}
-            Some(into) if overflowed => {
-                state = ExitState::Failure;
-                summary =
-                    Some(format!("stdout exceeded the 16 MB payload limit; nothing was written to {}", into.writer));
-            }
-            Some(into) if state == ExitState::Success => {
-                let origin = Origin { trigger: into.trigger.clone(), run_id: Some(job.id.clone()) };
-                let payload = Value::Object(Map::from_iter([("payload".into(), Value::String(stdout))]));
-                match shared.write(&into.writer, payload, origin) {
-                    Ok(changes) => summary = Some(format!("{}: {changes} changes", into.writer)),
-                    Err(e) => (state, summary) = (ExitState::Failure, Some(format!("{e:#}"))),
-                }
-            }
-            Some(_) => {}
-        }
-        report.send(state, summary);
+        let _ = child.wait();
+        finish(&shared, &job.id, job.into.as_ref());
     });
     Ok(pid)
 }
 
-struct RunLog {
-    file: Option<File>,
-    written: usize,
-    truncated: bool,
+/// Takes over a run whose holder an earlier engine started: waits for the holder to release the run folder, then
+/// records the exit as `spawn` would. A run without a folder is left for the tick to mark as lost.
+pub(crate) fn adopt(shared: &Arc<Shared>, id: String, pid: Option<u32>, into: Option<PayloadWriter>) {
+    let Ok(lock) = File::open(run_dir(&shared.home, &id)) else { return };
+    shared.children.lock().unwrap().insert(id.clone(), Child::process(pid.unwrap_or(0)));
+    let shared = shared.clone();
+    thread::spawn(move || {
+        // SAFETY: flock only reads the descriptor, which `lock` keeps open.
+        unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_SH) };
+        finish(&shared, &id, into.as_ref());
+    });
 }
 
-impl RunLog {
-    fn append(&mut self, bytes: &[u8]) {
-        let room = LOG_CAP.saturating_sub(self.written);
-        if let Some(file) = &mut self.file {
-            let _ = file.write_all(&bytes[..bytes.len().min(room)]);
-            if bytes.len() > room && !self.truncated {
-                let _ = file.write_all(b"\n[log truncated at 1 MB]\n");
+/// Records how the held run ended, from its `exit`, and hands stdout to `into` or reads the outcome line from it.
+fn finish(shared: &Arc<Shared>, id: &str, into: Option<&PayloadWriter>) {
+    let report = ExitReport::new(shared, id.to_string());
+    // Its process group may be reused from now on, so the engine must not signal it.
+    shared.children.lock().unwrap().insert(id.to_string(), Child::InEngine);
+    let dir = run_dir(&shared.home, id);
+    let exit: Value =
+        fs::read_to_string(dir.join("exit")).ok().and_then(|e| serde_json::from_str(&e).ok()).unwrap_or_default();
+    let reason = exit["reason"].as_str().map(String::from);
+    let (mut state, mut summary) = match (&reason, exit["code"].as_i64(), exit["signal"].as_i64()) {
+        _ if exit.is_null() => (ExitState::Failure, Some("its holder exited without recording the exit".into())),
+        (Some(r), ..) if r == "stopped" => (ExitState::Stopped, None),
+        (Some(r), ..) => (ExitState::Failure, Some(r.clone())),
+        (None, Some(0), _) => (ExitState::Success, None),
+        (None, Some(code), _) => (ExitState::Failure, Some(format!("exited with exit status: {code}"))),
+        (None, None, signal) => (ExitState::Failure, Some(format!("exited with signal: {}", signal.unwrap_or(0)))),
+    };
+    let out = dir.join("out");
+    match into {
+        None if reason.is_none() && !exit.is_null() => {
+            let stdout = read_tail(&out).unwrap_or_default();
+            let last_line = stdout.lines().rev().find(|l| !l.trim().is_empty());
+            let outcome = last_line.and_then(|l| serde_json::from_str::<Value>(l).ok());
+            if let Some(refined) = outcome.as_ref().and_then(|o| o["outcome"].as_str()).and_then(ExitState::parse) {
+                state = refined;
+            }
+            if let Some(s) = outcome.as_ref().and_then(|o| o["summary"].as_str()) {
+                summary = Some(s.to_string());
             }
         }
-        self.truncated |= bytes.len() > room;
-        self.written += bytes.len();
+        None => {}
+        Some(into) if exit["out_truncated"] == true => {
+            state = ExitState::Failure;
+            summary = Some(format!("stdout exceeded the 16 MB payload limit; nothing was written to {}", into.writer));
+        }
+        Some(into) if state == ExitState::Success => {
+            let stdout = fs::read(&out).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+            let origin = Origin { trigger: into.trigger.clone(), run_id: Some(id.to_string()) };
+            let payload = Value::Object(Map::from_iter([("payload".into(), Value::String(stdout))]));
+            match shared.write(&into.writer, payload, origin) {
+                Ok(changes) => summary = Some(format!("{}: {changes} changes", into.writer)),
+                Err(e) => (state, summary) = (ExitState::Failure, Some(format!("{e:#}"))),
+            }
+        }
+        Some(_) => {}
     }
+    report.send(state, summary);
 }
 
-#[derive(Clone, Copy)]
-enum Capture {
-    /// Everything, up to `PAYLOAD_CAP`.
-    Payload,
-    /// The last `TAIL` to `2 * TAIL` bytes.
-    Tail,
+fn read_tail(path: &Path) -> std::io::Result<String> {
+    let mut file = File::open(path)?;
+    let len = file.metadata()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(TAIL)))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-#[derive(Default)]
-struct Captured {
-    bytes: Vec<u8>,
-    overflowed: bool,
+/// Writes a line to a long-running run's stdin, one writer at a time per run.
+pub(crate) fn input(shared: &Shared, id: &str, text: &str) -> Result<()> {
+    let lock = match shared.children.lock().unwrap().get(id) {
+        Some(Child::Process { input, .. }) => input.clone(),
+        _ => bail!("run {id} is not running"),
+    };
+    let _held = lock.lock().unwrap();
+    let path = run_dir(&shared.home, id).join("in");
+    let mut fifo = match OpenOptions::new().write(true).custom_flags(libc::O_NONBLOCK).open(&path) {
+        Ok(fifo) => fifo,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => bail!("run {id} takes no input: it is not long-running"),
+        Err(e) => bail!("run {id} is not reading its input: {e}"),
+    };
+    // SAFETY: fcntl only changes the descriptor's flags, back to blocking writes.
+    unsafe { libc::fcntl(fifo.as_raw_fd(), libc::F_SETFL, 0) };
+    let mut line = text.to_string();
+    if !line.ends_with('\n') {
+        line.push('\n');
+    }
+    fifo.write_all(line.as_bytes())?;
+    Ok(())
 }
 
-fn pump(mut from: impl Read, log: &Mutex<RunLog>, keep: Option<(&Mutex<Captured>, Capture)>) {
-    let mut buf = [0u8; 8192];
-    while let Ok(n @ 1..) = from.read(&mut buf) {
-        let chunk = &buf[..n];
-        if let Some((captured, capture)) = keep {
-            let mut captured = captured.lock().unwrap();
-            match capture {
-                Capture::Payload if captured.bytes.len() + n > PAYLOAD_CAP => captured.overflowed = true,
-                Capture::Payload => captured.bytes.extend_from_slice(chunk),
-                Capture::Tail => {
-                    captured.bytes.extend_from_slice(chunk);
-                    if captured.bytes.len() > 2 * TAIL {
-                        let cut = captured.bytes.len() - TAIL;
-                        captured.bytes.drain(..cut);
-                    }
-                }
-            }
+/// Asks a running command's holder to stop it: SIGTERM to its process group, SIGKILL after a grace period.
+pub(crate) fn stop(shared: &Shared, id: &str) -> Result<bool> {
+    match shared.children.lock().unwrap().get(id) {
+        Some(Child::Process { pid, .. }) if *pid > 0 => {
+            // SAFETY: kill has no memory-safety preconditions; the holder is alive while it is in `children`.
+            unsafe { libc::kill(*pid as libc::pid_t, libc::SIGTERM) };
+            Ok(true)
         }
-        log.lock().unwrap().append(chunk);
+        _ => Ok(false),
     }
 }

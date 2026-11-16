@@ -1,0 +1,13 @@
+#!/bin/zsh
+# sessions.answer {session, at}: hands the answer recorded by sessions.decide to the session's waiting PermissionRequest
+# hook (files/decide) through its FIFO. Does nothing if no hook is waiting.
+zmodload zsh/system
+fifo=$SWITCHBOARD_HOME/data/decisions/$SWB_ARG_SESSION
+[[ -p $fifo ]] || { print '{"outcome": "success", "summary": "no hook waiting"}'; exit 0 }
+out=$("$SWB" query sessions_items id=$SWB_ARG_SESSION | jq -c --arg at "$SWB_ARG_AT" '.[0]
+  | (.answer | fromjson? // null) as $answer | select($answer != null)
+  | {hookSpecificOutput: {hookEventName: "PermissionRequest", decision: $answer}, at: $at}')
+[[ -n $out ]] || { print '{"outcome": "success", "summary": "no answer"}'; exit 0 }
+sysopen -w -o nonblock -u fd $fifo 2>/dev/null || { print '{"outcome": "success", "summary": "no hook waiting"}'; exit 0 }
+print -r -u $fd -- $out
+print '{"outcome": "success", "summary": "answered"}'

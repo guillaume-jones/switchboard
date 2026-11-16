@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react'
 import { run, useQuery, type CardProps } from 'switchboard'
-import { SendIcon, Spinner, useDraft } from './lib/sessions'
+import { MessageBox, Spinner, useDraft, withAttachments, type Attachment } from './lib/sessions'
 
-/** Starts a background Claude session (`sessions.start`) in this folder or the one given, showing why if it fails. */
+/**
+ * Starts a background Claude session (`sessions.start`) with files attached, in this folder or the one given, showing
+ * why if it fails.
+ */
 export default function SessionBox(_: CardProps) {
-  const [prompt, setPrompt] = useDraft('SessionBox.prompt')
+  const [, setPrompt] = useDraft('SessionBox.prompt')
+  const [, setFiles] = useDraft('SessionBox.files')
   const [cwd, setCwd] = useDraft('SessionBox.cwd')
   const [starting, setStarting] = useState(false)
   const [runId, setRunId] = useState<string>()
@@ -16,35 +20,40 @@ export default function SessionBox(_: CardProps) {
     return () => clearTimeout(timer)
   }, [runId])
 
+  const start = (prompt: string, files: Attachment[]) => {
+    if (!prompt || starting) return
+    setStarting(true)
+    setError('')
+    run('sessions.start', { ...withAttachments('prompt', prompt, files), cwd: cwd.trim() })
+      .then(
+        id => setRunId(id),
+        (failure: Error) => setError(failure.message),
+      )
+      .finally(() => setStarting(false))
+  }
+
   return (
-    <form
-      style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', flex: 1 }}
-      onKeyDown={e => {
-        if (e.key !== 'Enter') return
-        if (e.metaKey) e.currentTarget.requestSubmit()
-        if (e.metaKey || e.target instanceof HTMLInputElement) e.preventDefault()
-      }}
-      onSubmit={e => {
-        e.preventDefault()
-        if (!prompt.trim() || starting) return
-        setStarting(true)
-        setError('')
-        run('sessions.start', { prompt, cwd: cwd.trim() })
-          .then(
-            id => setRunId(id),
-            (failure: Error) => setError(failure.message),
-          )
-          .finally(() => setStarting(false))
-      }}
-    >
-      <textarea
-        value={prompt}
-        onChange={e => setPrompt(e.target.value)}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minWidth: 0 }}>
+      <MessageBox
+        draft="SessionBox.prompt"
+        files="SessionBox.files"
         placeholder={cwd.trim() ? `Ask Claude in ${cwd.trim()}` : 'Ask Claude to change this app'}
-        autoComplete="off"
-        enterKeyHint="enter"
-        rows={1}
-        style={{ flex: '1 1 100%' }}
+        onSend={start}
+        onError={setError}
+        button={
+          starting ? (
+            <Spinner />
+          ) : runId ? (
+            <Outcome
+              runId={runId}
+              onSuccess={() => {
+                setPrompt('')
+                setFiles('')
+              }}
+              onFailure={setError}
+            />
+          ) : undefined
+        }
       />
       <input
         value={cwd}
@@ -54,25 +63,9 @@ export default function SessionBox(_: CardProps) {
         autoCorrect="off"
         autoCapitalize="off"
         spellCheck={false}
-        style={{ flex: '1 1 0', minWidth: 0 }}
       />
-      <button
-        type="submit"
-        className={runId ? 'primary' : 'primary icon'}
-        disabled={!prompt.trim() || starting}
-        title="Send"
-        aria-label="Send"
-      >
-        {starting ? (
-          <Spinner />
-        ) : runId ? (
-          <Outcome runId={runId} onSuccess={() => setPrompt('')} onFailure={setError} />
-        ) : (
-          <SendIcon />
-        )}
-      </button>
       {error && <span style={{ color: 'var(--bad)' }}>{error}</span>}
-    </form>
+    </div>
   )
 }
 

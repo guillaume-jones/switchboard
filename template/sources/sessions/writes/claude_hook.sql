@@ -1,5 +1,5 @@
 INSERT INTO sessions.items (id, agent, title, status, cwd, run_id, raw, created_at, updated_at, host, entrypoint, last_message, last_prompt, decision)
-VALUES (
+SELECT
   :payload ->> '$.session_id',
   'claude',
   substr(:payload ->> '$.prompt', 1, 200),
@@ -18,14 +18,15 @@ VALUES (
     'tool_input', json(:payload -> '$.tool_input'),
     'at', CAST(unixepoch('subsec') * 1000 AS INTEGER)
   ), NULL)
-)
+WHERE :payload ->> '$.hook_event_name' <> 'SessionEnd'
+  OR EXISTS (SELECT 1 FROM sessions.items WHERE id = :payload ->> '$.session_id')
 ON CONFLICT (id) DO UPDATE SET
   title = coalesce(title, excluded.title),
   cwd = excluded.cwd,
   run_id = coalesce(excluded.run_id, run_id),
   raw = excluded.raw,
   updated_at = excluded.updated_at,
-  host = coalesce(host, excluded.host),
+  host = coalesce(excluded.host, host),
   entrypoint = coalesce(entrypoint, excluded.entrypoint),
   last_message = coalesce(excluded.last_message, last_message),
   last_prompt = coalesce(excluded.last_prompt, last_prompt),
@@ -55,4 +56,15 @@ FROM (
     WHEN 'SessionEnd' THEN 'ended'
   END AS status
 ) AS new
-WHERE id = :payload ->> '$.session_id' AND new.status IS NOT NULL
+WHERE id = :payload ->> '$.session_id' AND new.status IS NOT NULL;
+
+UPDATE sessions.sending SET acked = 1
+WHERE session = :payload ->> '$.session_id' AND :payload ->> '$.hook_event_name' = 'UserPromptSubmit';
+
+DELETE FROM sessions.sending
+WHERE session = :payload ->> '$.session_id' AND :payload ->> '$.hook_event_name' IN ('Stop', 'StopFailure', 'SessionEnd')
+  AND (acked OR sent_at IS NOT NULL)
+;
+
+DELETE FROM sessions.folders
+WHERE session = :payload ->> '$.session_id' AND cwd = :payload ->> '$.cwd'

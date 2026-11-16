@@ -1,7 +1,8 @@
 #!/bin/zsh
-# sessions.start {prompt, cwd?, model?, attachments?}: starts a background Claude Code session (claude --bg) in cwd
-# (default this folder; a bare name means that folder under ~/Documents) on model (default opus). Claude names it and
-# reports its state; sessions.sync picks both up. Fails if Claude does not trust the folder yet.
+# sessions.start {prompt, cwd?, model?, attachments?, disallowed?}: starts a Claude Code session held by Switchboard
+# (sessions.serve) in cwd (default this folder; a bare name means that folder under ~/Documents) on model (default
+# opus), and succeeds with "started <short id>" once Claude reports its session id. disallowed: space-separated tools
+# the session can never use.
 finish() {
   local s=${2//\\/\\\\}; s=${s//\"/\\\"}; s=${s//[[:cntrl:]]/ }
   print -r -- "{\"outcome\": \"$1\", \"summary\": \"$s\"}"
@@ -10,13 +11,21 @@ finish() {
 prompt=$SWB_ARG_PROMPT
 cwd=${SWB_ARG_CWD:-$SWITCHBOARD_HOME}
 [[ $cwd != /* && -d $HOME/Documents/$cwd ]] && cwd=$HOME/Documents/$cwd
+[[ -d $cwd ]] || finish failure "no folder $cwd"
 if [[ -n $SWB_ARG_ATTACHMENTS ]]; then
-  attached=$("$SOURCE_DIR/files/attach" $SWB_ARG_ATTACHMENTS 2>&1) || finish failure "$attached"
-  prompt=${prompt:+$prompt$'\n\n'}$attached
+  prompt=$("$SOURCE_DIR/files/attach" $SWB_ARG_ATTACHMENTS $prompt 2>&1) || finish failure "$prompt"
 fi
 [[ -n $prompt ]] || finish failure "prompt is required"
-cd $cwd 2>/dev/null || finish failure "no folder $cwd"
-out=$(claude --bg --model ${SWB_ARG_MODEL:-opus} --permission-mode auto --settings $SOURCE_DIR/files/claude-hooks.json -- $prompt </dev/null 2>&1)
-short=$(print -r -- $out | sed -n 's/.*backgrounded · \([0-9a-f]\{8\}\).*/\1/p' | head -1)
-[[ -n $short ]] || finish failure "$out"
-finish success "started $short"
+run=$("$SWB" run start sessions.serve prompt="$(print -r -- $prompt | jq -Rsc 'rtrimstr("\n")')" cwd="$(print -r -- ${cwd:A} | jq -Rr @json)" \
+  model=${SWB_ARG_MODEL:-opus} disallowed="$(print -r -- $SWB_ARG_DISALLOWED | jq -Rr @json)" 2>&1) || finish failure "$run"
+dir=$SWITCHBOARD_HOME/data/runs/$run
+zmodload zsh/zselect
+for i in {1..1100}; do
+  session=$(jq -r 'select(.session) | .session' $dir/out 2>/dev/null | head -1)
+  [[ -n $session ]] && finish success "started ${session[1,8]}"
+  if [[ -e $dir/exit ]]; then
+    finish failure "$(tail -c 300 $dir/err 2>/dev/null || jq -r '.summary // empty' $dir/out 2>/dev/null | tail -1)"
+  fi
+  zselect -t 10
+done
+finish failure "Claude did not report a session within 110s"

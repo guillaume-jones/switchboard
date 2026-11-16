@@ -1,0 +1,4 @@
+#!/bin/zsh
+# ui.open {url}: opens a web, mailto or slack:// link on this Mac, for the desktop webview, which does not open links itself.
+[[ $SWB_ARG_URL == (http://*|https://*|mailto:*|slack://*) ]] || { print -r -- '{"outcome": "failure", "summary": "unsupported link"}'; exit 1 }
+exec open $SWB_ARG_URL

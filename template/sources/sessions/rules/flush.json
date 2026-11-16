@@ -1,0 +1,8 @@
+{
+  "id": "sessions-flush",
+  "when": { "view": "sessions_flushable", "schedule": "* * * * *" },
+  "key": "{session}@{queued_at}",
+  "run": "sessions.flush",
+  "args": { "session": "{session}", "queued_at": "{queued_at}" },
+  "max_per_hour": 600
+}

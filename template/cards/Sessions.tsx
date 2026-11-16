@@ -1,6 +1,6 @@
 import { useState, type CSSProperties } from 'react'
 import { CardSlot, mutate, useQuery, type CardProps } from 'switchboard'
-import { TONES, useFlushQueues, type Session } from './lib/sessions'
+import { TONES, type Session } from './lib/sessions'
 import { useMobile } from './lib/theme'
 
 const ROW: CSSProperties = {
@@ -14,7 +14,7 @@ const ELLIPSIS: CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', 
 
 /**
  * The Ask Claude box over recent Claude sessions: title, folder, time and status, with a click showing the session's
- * `Transcript` in a tab of its own. Also sends queued follow-ups, so they go out after their transcript tab is left.
+ * `Transcript` in a tab of its own.
  */
 export default function Sessions({ limit = 30 }: CardProps<{ limit?: number }>) {
   const client = useMobile() ? 'mobile' : 'desktop'
@@ -22,8 +22,6 @@ export default function Sessions({ limit = 30 }: CardProps<{ limit?: number }>) 
   const sessions = useQuery<Session>('sessions.recent', { limit, hidden: 0 }) ?? []
   const archived = useQuery<Session>('sessions.recent', { limit: showArchived ? limit : 0, hidden: 1 }) ?? []
   const [error, setError] = useState('')
-
-  useFlushQueues(sessions, setError)
 
   const fail = (e: Error) => setError(e.message)
   const open = (session: Session) =>

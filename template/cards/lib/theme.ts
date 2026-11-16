@@ -73,6 +73,8 @@ button[aria-pressed=true], button[aria-current=page] {
   textarea { padding: calc((38px - 1lh - 2px) / 2) 10px; }
 }
 :root[data-mobile] :is(button, input, select) { min-height: 42px; border-radius: 10px; }
+:root input.inline-edit { field-sizing: content; min-width: 2ch; max-width: 100%; min-height: 0; padding: 0 2px; margin-inline: -2px; border: none; border-radius: 4px; background: transparent; }
+:root input.inline-edit:focus { box-shadow: none; background: var(--raised); }
 :root[data-mobile] textarea { padding-block: calc((42px - 1lh - 2px) / 2); border-radius: 10px; }
 :root[data-mobile] button.icon { width: 42px; font-size: 18px; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -88,14 +90,19 @@ button[aria-pressed=true], button[aria-current=page] {
 :root[data-mobile] .health { min-width: 26px; min-height: 26px; }
 :root[data-mobile] button.tab { min-height: 32px; padding: 4px 12px; }
 .composer {
-  display: flex; align-items: flex-end; gap: 6px; padding: 4px;
+  display: flex; align-items: flex-end; padding: 4px;
   background: var(--raised); border: 1px solid var(--border); border-radius: 22px; box-shadow: var(--shadow);
 }
+.composer .attach, :root[data-mobile] .composer .attach { width: 28px; }
+.composer [type=submit] { margin-inline: 4px 2px; }
 .composer:focus-within { border-color: var(--accent); }
+.composer-footer { padding: 6px calc(10px + var(--bottom-edge, 0px)) calc(10px + var(--bottom-edge, 0px)); transition: padding .15s ease-out; }
+:root[data-mobile] .composer-footer:focus-within { padding: 4px 6px 6px; }
 .chip.file { background: var(--raised); border: 1px solid var(--border); box-shadow: var(--shadow); }
 button.chip.file:disabled { opacity: 1; }
-.composer textarea { flex: 1; min-width: 0; background: transparent; border: none; box-shadow: none; padding-inline: 2px 10px; }
+.composer textarea { flex: 1; min-width: 0; background: transparent; border: none; box-shadow: none; padding-inline: 4px 16px; }
 .message > :first-child { margin-top: 4px; }
+.message .chip { vertical-align: middle; box-shadow: none; background: color-mix(in srgb, var(--accent) 22%, var(--panel)); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
 .grow { display: grid; grid-template-rows: 1fr; animation: grow .2s ease-out; }
 @keyframes grow { from { grid-template-rows: 0fr; opacity: 0; } }
 .collapse { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .2s ease-out, opacity .2s; }

@@ -1,12 +1,19 @@
 #!/bin/zsh
 # sessions.open {session}: shows a session in the app that runs it: background sessions attached in a new terminal
 # window, Zed's agent panel for Zed sessions (it cannot open a given thread), otherwise the session resumed in a new
-# terminal window (sessions.launch).
+# terminal window (sessions.launch), after Switchboard stops holding it (sessions.serve), which ends a turn in progress.
 row=$("$SWB" query sessions_items id=$SWB_ARG_SESSION | jq -c '.[0] // empty')
 [[ -n $row ]] || { print -r -- '{"outcome": "failure", "summary": "no such session"}'; exit 1 }
-short=$(print -r -- $row | jq -r 'select(.kind == "background") | .short_id // empty')
-[[ -n $short ]] && SWB_ARG_ATTACH=$short SWB_ARG_CWD=$(print -r -- $row | jq -r '.cwd // empty') exec "$SOURCE_DIR/commands/launch"
+cwd=$(print -r -- $row | jq -r '.cwd // empty')
+run=$("$SWB" query sessions_served session=$SWB_ARG_SESSION | jq -r '.[0].run_id // empty')
+if [[ -n $run ]]; then
+  "$SWB" run stop $run >/dev/null 2>&1
+  for i in {1..500}; do [[ -e $SWITCHBOARD_HOME/data/runs/$run/exit ]] && break; sleep 0.02; done
+  SWB_ARG_CWD=$cwd SWB_ARG_PROMPT= exec "$SOURCE_DIR/commands/launch"
+fi
+bg=$(jq -r --arg s $SWB_ARG_SESSION 'select(.sessionId == $s and .kind == "bg") | .pid' ~/.claude/sessions/*.json 2>/dev/null | head -1)
+[[ -n $bg ]] && kill -0 $bg 2>/dev/null && SWB_ARG_ATTACH=${SWB_ARG_SESSION[1,8]} SWB_ARG_CWD=$cwd exec "$SOURCE_DIR/commands/launch"
 case $(print -r -- $row | jq -r '.host // empty') in
   dev.zed.Zed*) open "zed://agent" && print -r -- '{"outcome": "success", "summary": "opened the Zed agent panel"}' ;;
-  *) SWB_ARG_CWD=$(print -r -- $row | jq -r '.cwd // empty') SWB_ARG_PROMPT= exec "$SOURCE_DIR/commands/launch" ;;
+  *) SWB_ARG_CWD=$cwd SWB_ARG_PROMPT= exec "$SOURCE_DIR/commands/launch" ;;
 esac

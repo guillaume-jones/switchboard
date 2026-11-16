@@ -1,26 +1,43 @@
-#!/bin/zsh
-# sessions.poke {session, text, attachments?}: sends text to a running Claude session through its messaging socket, using a headless
-# Haiku session's SendMessage tool. Reaches sessions started anywhere, busy or idle; the message is marked as coming from
-# Switchboard on the user's behalf.
-finish() {
-  local s=${2//\\/\\\\}; s=${s//\"/\\\"}; s=${s//[[:cntrl:]]/ }
-  print -r -- "{\"outcome\": \"$1\", \"summary\": \"$s\"}"
-  [[ $1 == success ]]; exit
-}
-text=$SWB_ARG_TEXT
-if [[ -n $SWB_ARG_ATTACHMENTS ]]; then
-  attached=$("$SOURCE_DIR/files/attach" $SWB_ARG_ATTACHMENTS 2>&1) || finish failure "$attached"
-  text=${text:+$text$'\n\n'}$attached
-fi
-[[ -n $text ]] || finish failure "text is required"
-socket=$(jq -r --arg id "$SWB_ARG_SESSION" 'select(.sessionId == $id) | .messagingSocketPath // empty' ~/.claude/sessions/*.json 2>/dev/null | head -1)
-[[ -n $socket ]] || finish failure "session $SWB_ARG_SESSION is not running"
-message="Message from Switchboard, sent on behalf of the user from the Switchboard app. No reply is needed: replies are not read.
+#!/usr/bin/env -S python3 -I
+"""sessions.poke {session, text, attachments?, interject?}: delivers text to a Claude session that another app runs
+(a terminal, Zed), through the session's messaging socket. Claude shows it as a message from another session, sent on
+the user's behalf from Switchboard. With interject it is taken at once, else when Claude next takes input."""
+import glob, hashlib, json, os, socket, subprocess, sys, uuid
 
-$text"
-instruction="Call SendMessage exactly once, with to set to uds:$socket and message set to the text between the markers, verbatim. Do nothing else.
-<<<MESSAGE
-$message
-MESSAGE>>>"
-out=$(printf %s $instruction | claude -p --safe-mode --model haiku --allowedTools SendMessage 2>&1) || finish failure "claude exited with $?: $out"
-finish success "sent"
+finish = lambda outcome, summary: (print(json.dumps({"outcome": outcome, "summary": summary})), sys.exit(outcome != "success"))
+env = os.environ
+text = env.get("SWB_ARG_TEXT", "")
+if env.get("SWB_ARG_ATTACHMENTS"):
+    attached = subprocess.run([os.path.join(env["SOURCE_DIR"], "files", "attach"), env["SWB_ARG_ATTACHMENTS"], text],
+                              capture_output=True, text=True)
+    if attached.returncode:
+        finish("failure", attached.stderr.strip() or attached.stdout.strip())
+    text = attached.stdout.rstrip("\n")
+if not text:
+    finish("failure", "text is required")
+for path in glob.glob(os.path.expanduser("~/.claude/sessions/*.json")):
+    try:
+        live = json.load(open(path))
+    except (OSError, ValueError):
+        continue
+    if live.get("sessionId") == env["SWB_ARG_SESSION"] and live.get("messagingSocketPath"):
+        break
+else:
+    finish("failure", f"session {env['SWB_ARG_SESSION']} is not running")
+sock = live["messagingSocketPath"]
+lines = []
+try:
+    key = f"{os.path.dirname(path)}/{live['pid']}.{hashlib.sha256(sock.encode()).hexdigest()}.key"
+    lines.append({"type": "auth", "token": json.load(open(key))["peerToken"]})
+except (OSError, ValueError, KeyError):
+    pass
+lines.append({"type": "user", "message": {"content": "Sent by the user from Switchboard:\n\n" + text},
+              "priority": "now" if env.get("SWB_ARG_INTERJECT") else "next", "from": "switchboard", "msg_id": str(uuid.uuid4())})
+try:
+    with socket.socket(socket.AF_UNIX) as s:
+        s.settimeout(5)
+        s.connect(sock)
+        s.sendall("".join(json.dumps(l) + "\n" for l in lines).encode())
+except OSError as e:
+    finish("failure", f"cannot reach the session: {e}")
+finish("success", "sent")

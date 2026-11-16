@@ -1,5 +1,5 @@
-SELECT uuid, at, role, text FROM (
-  SELECT uuid, at, role, text FROM sessions.messages
+SELECT uuid, at, role, text, tokens FROM (
+  SELECT uuid, at, role, text, tokens FROM sessions.messages
   WHERE session = :session AND text IS NOT NULL AND text != ''
   ORDER BY at DESC
   LIMIT :limit

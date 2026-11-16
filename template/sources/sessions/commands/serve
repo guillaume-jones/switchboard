@@ -1,0 +1,112 @@
+#!/usr/bin/env -S python3 -I
+"""sessions.serve {session?, prompt?, cwd, model?, disallowed?}: holds a Claude Code session open for Switchboard, as
+`claude -p` reading stream-json, so each `swb run input $RUN_ID <line>` reaches it at once. Lines are JSON:
+{"text": "..."} sends a message, folded into the turn in progress if Claude is working; {"interrupt": true} stops
+the turn. Resumes session, or starts a new one with prompt, and prints {"session": "<id>"} once Claude reports it.
+Exits once Claude has been idle for IDLE seconds; messages arriving meanwhile are sent to a resumed process."""
+import json, os, select, subprocess, sys, time, uuid
+
+IDLE = 900
+HOOKS = os.path.join(os.environ["SOURCE_DIR"], "files", "claude-hooks.json")
+
+
+class Lines:
+    """Complete lines from a descriptor, read without buffering past them, so select keeps telling the truth."""
+
+    def __init__(self, fd):
+        self.fd, self.buf, self.eof = fd, b"", False
+
+    def fill(self):
+        chunk = os.read(self.fd, 65536)
+        self.eof = not chunk
+        self.buf += chunk
+
+    def read(self):
+        self.fill()
+        *lines, self.buf = self.buf.split(b"\n")
+        return [l.decode(errors="replace") for l in lines if l.strip()]
+
+    def line(self):
+        while b"\n" not in self.buf and not self.eof:
+            self.fill()
+        line, _, self.buf = self.buf.partition(b"\n")
+        return line.decode(errors="replace")
+
+
+def parse(line):
+    try:
+        message = json.loads(line)
+    except ValueError:
+        message = None
+    return message if isinstance(message, dict) else {"text": line}
+
+
+stdin = Lines(0)
+args = json.loads(stdin.line() or "{}")
+session, cwd = args.get("session") or None, os.path.expanduser(args.get("cwd") or os.environ["SWITCHBOARD_HOME"])
+*early, stdin.buf = stdin.buf.split(b"\n")
+queued = [{"text": args["prompt"]}] if args.get("prompt") else []
+queued += [parse(l.decode(errors="replace")) for l in early if l.strip()]
+finish = lambda outcome, summary: (print(json.dumps({"outcome": outcome, "summary": summary}), flush=True),
+                                   sys.exit(outcome != "success"))
+if not session and not queued:
+    finish("failure", "session or prompt is required")
+
+while True:
+    command = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+               "--permission-mode", "auto", "--settings", HOOKS]
+    command += ["--resume", session] if session else []
+    command += ["--model", args["model"]] if args.get("model") else []
+    command += ["--disallowedTools", *args["disallowed"].split()] if args.get("disallowed") else []
+    try:
+        claude = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  env={**os.environ, "SWB_SESSION_HOST": "switchboard"})
+    except OSError as e:
+        finish("failure", f"cannot start claude in {cwd}: {e}")
+    out = Lines(claude.stdout.fileno())
+    send = lambda message: (claude.stdin.write((json.dumps(message) + "\n").encode()), claude.stdin.flush())
+    busy, idle_since, closing, pending = False, time.monotonic(), False, []
+
+    def handle(message):
+        global busy
+        if closing:
+            pending.append(message)
+        elif message.get("interrupt"):
+            send({"type": "control_request", "request_id": str(uuid.uuid4()), "request": {"subtype": "interrupt"}})
+        elif message.get("text"):
+            send({"type": "user", "message": {"role": "user", "content": message["text"]}})
+            busy = True
+
+    for message in queued:
+        handle(message)
+    while not out.eof:
+        wait = None if busy or closing else max(0.0, idle_since + IDLE - time.monotonic())
+        readable, _, _ = select.select([0, out.fd], [], [], wait)
+        if not readable:
+            claude.stdin.close()
+            closing = True
+        if 0 in readable:
+            for line in stdin.read():
+                message = parse(line)
+                try:
+                    handle(message)
+                except BrokenPipeError:
+                    pending.append(message)
+        if out.fd in readable:
+            for line in out.read():
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if event.get("type") == "system" and event.get("subtype") == "init" and event.get("session_id") != session:
+                    session = event["session_id"]
+                    print(json.dumps({"session": session}), flush=True)
+                elif event.get("type") == "result":
+                    busy, idle_since = False, time.monotonic()
+    code = claude.wait()
+    if pending and session:
+        queued = pending
+        continue
+    if code:
+        finish("failure", f"claude exited with {code}")
+    finish("success", f"idle for {IDLE // 60} min" if closing else "claude exited")

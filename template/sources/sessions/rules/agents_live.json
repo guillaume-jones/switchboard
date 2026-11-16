@@ -1,8 +1,0 @@
-{
-  "id": "sessions-agents-live",
-  "when": { "files": "~/.claude/sessions/*.json" },
-  "run": "sessions.sync",
-  "into": "sessions.agents_sync",
-  "max_per_hour": 3000,
-  "log": false
-}

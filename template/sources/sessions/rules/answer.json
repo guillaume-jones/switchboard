@@ -1,0 +1,8 @@
+{
+  "id": "sessions-answer",
+  "when": { "view": "sessions_answered" },
+  "key": "{id}@{at}",
+  "run": "sessions.answer",
+  "args": { "session": "{id}", "at": "{at}" },
+  "max_per_hour": 600
+}

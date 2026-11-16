@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
-import { mutate, run } from 'switchboard'
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react'
+import { mutate, run, useQuery } from 'switchboard'
 import { renderMarkdown } from './markdown'
 import { useMobile } from './theme'
 
@@ -20,12 +28,17 @@ export const BUBBLE: CSSProperties = {
 const USER: CSSProperties = { background: 'var(--raised)', boxShadow: 'inset 3px 0 var(--accent)' }
 const ASSISTANT: CSSProperties = { boxShadow: 'inset 3px 0 var(--claude)' }
 
-export const ATTACHED = /^Attached file: (\/.+)$/gm
+/** A saved attachment's path (alone or on an older "Attached file:" line), or the `[file: name]` placeholder of an unsent one. */
+const ATTACHMENT = /(?:^Attached file: )?(\/\S*\/data\/attachments\/[\w-]+\/[\w.-]+)|\[file: ([^\]\n]+)\]/gm
+/** A message's text without its attachments, for matching a sent prompt to the message it became. */
+export const withoutAttachments = (text: string) => text.replace(ATTACHMENT, '').trim()
+const placeholder = (name: string) => `[file: ${name.replace(/[\]\n]/g, '_')}]`
+const escapeHtml = (value: string) => value.replace(/[&<>"]/g, c => `&#${c.charCodeAt(0)};`)
 
 /**
  * A transcript message: your messages with an accent bar, Claude's with a Claude-orange bar. `faded` for ones not yet in
- * the transcript. Attached file lines, or `attachments` (names, for messages not yet sent), show as chips; paths open the
- * file on desktop.
+ * the transcript. Attachments in your messages show as chips where they appear in the text; saved ones open the file on
+ * desktop.
  */
 export function Bubble({
   role,
@@ -33,19 +46,29 @@ export function Bubble({
   text,
   faded,
   action,
-  attachments,
 }: {
   role: string
   label: string
   text: string
   faded?: boolean
   action?: ReactNode
-  attachments?: string[]
 }) {
   const opacity = faded ? 0.5 : undefined
   const mobile = useMobile()
-  const files = attachments ?? (role === 'user' ? [...text.matchAll(ATTACHED)].map(m => m[1]) : [])
-  const body = role === 'user' ? text.replace(ATTACHED, '').trim() : text
+  const chips: string[] = []
+  const body =
+    role === 'user'
+      ? text.replace(ATTACHMENT, (_, path?: string, name?: string) => {
+          const label = escapeHtml(path?.split('/').pop() ?? name!)
+          chips.push(
+            path && !mobile
+              ? `<button type="button" class="chip file" data-path="${escapeHtml(path)}" title="Open ${escapeHtml(path)}">${label}</button>`
+              : `<button type="button" class="chip file" disabled>${label}</button>`,
+          )
+          return `ATTACHMENTCHIP${chips.length - 1}END`
+        })
+      : text
+  const html = renderMarkdown(body).replace(/ATTACHMENTCHIP(\d+)END/g, (_, i) => chips[Number(i)])
   return (
     <div style={{ ...BUBBLE, ...(role === 'user' ? USER : ASSISTANT) }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -54,23 +77,15 @@ export function Bubble({
         </span>
         {action && <span style={{ marginLeft: 'auto' }}>{action}</span>}
       </div>
-      <div className="message" style={{ opacity }} dangerouslySetInnerHTML={{ __html: renderMarkdown(body) }} />
-      {files.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '4px 0', opacity }}>
-          {files.map(path => (
-            <button
-              key={path}
-              type="button"
-              className="chip file"
-              disabled={mobile || !path.startsWith('/')}
-              title={mobile || !path.startsWith('/') ? undefined : `Open ${path}`}
-              onClick={() => run('sessions.reveal', { path })}
-            >
-              <PaperclipIcon /> {path.split('/').pop()}
-            </button>
-          ))}
-        </div>
-      )}
+      <div
+        className="message"
+        style={{ opacity }}
+        onClick={e => {
+          const path = (e.target as Element).closest<HTMLElement>('[data-path]')?.dataset.path
+          if (path) run('sessions.reveal', { path })
+        }}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
     </div>
   )
 }
@@ -83,7 +98,7 @@ export const TONES: Record<string, string> = {
   errored: 'bad',
 }
 const HOSTS: Record<string, string> = {
-  background: 'Claude agent',
+  background: 'Claude',
   switchboard: 'Switchboard',
   'dev.zed.Zed': 'Zed',
   'com.mitchellh.ghostty': 'Ghostty',
@@ -112,32 +127,89 @@ export type Session = {
   hidden: number
 }
 
-const DRAFT_EVENT = 'switchboard-draft'
-const subscribeToDrafts = (onChange: () => void) => {
-  window.addEventListener(DRAFT_EVENT, onChange)
-  window.addEventListener('storage', onChange)
-  return () => {
-    window.removeEventListener(DRAFT_EVENT, onChange)
-    window.removeEventListener('storage', onChange)
-  }
+const SAVE_DELAY = 500
+/**
+ * Local edits to drafts, saved to `sessions.draft_set` once typing pauses and dropped once `sessions_drafts` shows them,
+ * so typing never waits on a round trip and an echo of an older save never overwrites newer text.
+ */
+type Edit = { text: string; sent: Set<string>; saved: boolean; timer?: ReturnType<typeof setTimeout> }
+const edits = new Map<string, Edit>()
+const stored = new Map<string, string>()
+const listeners = new Set<() => void>()
+const emit = () => listeners.forEach(listener => listener())
+const subscribeToEdits = (listener: () => void) => {
+  listeners.add(listener)
+  return () => void listeners.delete(listener)
 }
-const storeDraft = (key: string, value: string) => {
-  if (value) localStorage.setItem(key, value)
-  else localStorage.removeItem(key)
-  window.dispatchEvent(new Event(DRAFT_EVENT))
+const readDraft = (key: string) => edits.get(key)?.text ?? stored.get(key) ?? ''
+
+/** Drops a saved edit once its text is stored, or once another client stores something else (`changed`). */
+function settle(key: string, changed: boolean) {
+  const edit = edits.get(key)
+  const value = stored.get(key) ?? ''
+  if (!edit?.saved || (value !== edit.text && (!changed || edit.sent.has(value)))) return
+  edits.delete(key)
+  emit()
 }
 
-/** A text value kept in `localStorage` under `key`, so it survives reloads and is shared by every card using the key. */
+function save(key: string) {
+  const edit = edits.get(key)
+  if (!edit) return
+  clearTimeout(edit.timer)
+  edit.timer = undefined
+  const { text } = edit
+  edit.sent.add(text)
+  mutate('sessions.draft_set', { key, text }).then(
+    () => {
+      if (edits.get(key) !== edit || edit.text !== text || edit.timer) return
+      edit.saved = true
+      settle(key, false)
+    },
+    () => undefined,
+  )
+}
+addEventListener('pagehide', () => edits.forEach((edit, key) => edit.timer && save(key)))
+
+function setDraft(key: string, next: string | ((current: string) => string)) {
+  const text = typeof next === 'function' ? next(readDraft(key)) : next
+  const edit = edits.get(key) ?? { text, sent: new Set<string>(), saved: false }
+  clearTimeout(edit.timer)
+  Object.assign(edit, { text, saved: false, timer: setTimeout(() => save(key), text ? SAVE_DELAY : 0) })
+  edits.set(key, edit)
+  emit()
+}
+
+/** A text value stored in `sessions_drafts` under `key`, so it survives reloads and follows you across cards and devices. */
 export function useDraft(key: string) {
-  const value = useSyncExternalStore(subscribeToDrafts, () => localStorage.getItem(key) ?? '')
-  return [value, (next: string) => storeDraft(key, next)] as const
+  const rows = useQuery<{ text: string }>('sessions_drafts', { key })
+  const value = rows && (rows[0]?.text ?? '')
+  useEffect(() => {
+    if (value === undefined) return
+    stored.set(key, value)
+    settle(key, true)
+  }, [key, value])
+  const edit = useSyncExternalStore(subscribeToEdits, () => edits.get(key)?.text)
+  return [edit ?? value ?? '', (next: string | ((current: string) => string)) => setDraft(key, next)] as const
 }
 
-export const queueKey = (session: string) => `Composer.queue.${session}`
-const queuedFilesKey = (session: string) => `Composer.queueFiles.${session}`
-
-type Attachment = { id: string; name: string }
+export type Attachment = { id: string; name: string }
 const parseFiles = (value: string): Attachment[] => (value ? JSON.parse(value) : [])
+
+/** A follow-up waiting in `sessions.queue` (`queued`, or `failed` with its error) or being sent by `sessions.flush`. */
+export type Outbox = {
+  session: string
+  state: 'queued' | 'failed' | 'sending'
+  text: string
+  files: string
+  queued_at: number
+  error: string | null
+  acked: number
+  sent_at: number | null
+}
+export const useOutbox = (session: string) => useQuery<Outbox>('sessions_outbox', { session }) ?? []
+/** An outbox message's text with its `{{attachment:<id>}}` references shown as the message box's placeholders. */
+export const outboxText = ({ text, files }: Outbox) =>
+  parseFiles(files).reduce((shown, f) => shown.replaceAll(`{{attachment:${f.id}}}`, placeholder(f.name)), text)
 
 /** Images are re-encoded to at most this many pixels per side, about what Claude reads them at, to keep uploads small. */
 const MAX_SIDE = 2000
@@ -173,86 +245,61 @@ async function upload(file: File): Promise<Attachment> {
 
 const draftKey = (session: string) => `Composer.draft.${session}`
 const filesKey = (session: string) => `Composer.files.${session}`
-const read = (key: string) => localStorage.getItem(key) ?? ''
 
-/** Sends a session's queued follow-up now, if any, taking it out of storage first so it is sent once. */
-function sendQueued(
-  session: Session,
-  onError: (message: string) => void,
-  onSent?: (prompt: string, files: string[]) => void,
-) {
-  const prompt = read(queueKey(session.id))
-  const files = parseFiles(read(queuedFilesKey(session.id)))
-  if (!prompt && !files.length) return
-  storeDraft(queueKey(session.id), '')
-  storeDraft(queuedFilesKey(session.id), '')
-  onSent?.(
-    prompt,
-    files.map(f => f.name),
-  )
-  followUp(session, prompt, files).catch((e: Error) => onError(e.message))
-}
-
-/** Moves a session's queued follow-up back into its message box, ahead of anything typed since. */
-function unqueue(session: string) {
-  const files = [...parseFiles(read(queuedFilesKey(session))), ...parseFiles(read(filesKey(session)))]
-  storeDraft(draftKey(session), [read(queueKey(session)), read(draftKey(session))].filter(Boolean).join('\n\n'))
-  storeDraft(filesKey(session), files.length ? JSON.stringify(files) : '')
-  storeDraft(queueKey(session), '')
-  storeDraft(queuedFilesKey(session), '')
-}
-
-/**
- * Sends each session's queued follow-up once Claude is no longer working or waiting on you. A queue is taken out of
- * storage before it is sent, so cards flushing the same session send it once.
- */
-export function useFlushQueues(
-  sessions: Session[],
-  onError: (message: string) => void,
-  onSent?: (prompt: string, files: string[]) => void,
-) {
-  useEffect(() => {
-    for (const session of sessions) {
-      if (!busy(session) && !WAITING.includes(session.status)) sendQueued(session, onError, onSent)
-    }
+/** Puts a queued or failed follow-up back into its message box, ahead of anything typed since. */
+function unqueue(entry: Outbox) {
+  const { session } = entry
+  setDraft(draftKey(session), current => [outboxText(entry), current].filter(Boolean).join('\n\n'))
+  setDraft(filesKey(session), current => {
+    const files = [...parseFiles(entry.files), ...parseFiles(current)]
+    return files.length ? JSON.stringify(files) : ''
   })
+  return mutate('sessions.queue_cancel', { session, queued_at: entry.queued_at })
 }
 
 export const busy = (session: Session) => session.status === 'working'
 
-/** Sends a prompt to a session with `sessions.send`, interrupting its turn if Claude is working and asking it to finish that turn's task too. */
-export function followUp(session: Session, prompt: string, files: Attachment[] = []) {
-  const attachments = files.length ? { attachments: files.map(f => f.id).join(',') } : {}
-  const interject = busy(session) ? { interject: 1 } : {}
-  return run('sessions.send', { session: session.id, text: prompt, ...attachments, ...interject })
+/**
+ * The `text`-style param and `attachments` for a command taking files: each file's placeholder becomes
+ * `{{attachment:<id>}}`, which the command replaces with its saved path. Files whose placeholder was deleted are dropped.
+ */
+export function withAttachments<K extends string>(param: K, prompt: string, files: Attachment[]) {
+  let text = prompt
+  const used: Attachment[] = []
+  for (const f of files) {
+    if (!text.includes(placeholder(f.name))) void mutate('sessions.detach', { id: f.id })
+    else {
+      text = text.replace(placeholder(f.name), `{{attachment:${f.id}}}`)
+      used.push(f)
+    }
+  }
+  return { [param]: text, ...(used.length ? { attachments: used.map(f => f.id).join(',') } : {}) } as Record<
+    K,
+    string
+  > & {
+    attachments?: string
+  }
 }
 
 const QUEUE_BUTTON: CSSProperties = { minHeight: 0, padding: '0 8px', fontSize: 12 }
 
 /**
- * The message queued for a busy session, shown as a faded user message. Cancel (Esc in the message box) moves it back
- * into the message box; Interrupt (⌘↩ with an empty message box) sends it now.
+ * The follow-up queued for a session, shown as a faded user message, or with its error if sending it failed. Cancel (Esc
+ * in the message box) moves it back into the message box; Interrupt (⌘↩ with an empty message box) sends it now, and
+ * Retry sends a failed one again.
  */
-export function QueuedMessage({
-  session,
-  onError,
-  onSent,
-}: {
-  session: Session
-  onError: (message: string) => void
-  onSent?: (prompt: string, files: string[]) => void
-}) {
-  const [queued] = useDraft(queueKey(session.id))
-  const queuedFiles = parseFiles(useDraft(queuedFilesKey(session.id))[0])
-  if (!queued && !queuedFiles.length) return null
+export function QueuedMessage({ session, onError }: { session: Session; onError: (message: string) => void }) {
+  const entry = useOutbox(session.id).find(e => e.state !== 'sending')
+  if (!entry) return null
+  const fail = (e: Error) => onError(e.message)
+  const failed = entry.state === 'failed'
   return (
     <div className="grow">
       <div>
         <Bubble
           role="user"
-          label="Queued"
-          text={queued}
-          attachments={queuedFiles.map(f => f.name)}
+          label={failed ? `Not sent · ${entry.error}` : 'Queued'}
+          text={outboxText(entry)}
           faded
           action={
             <span style={{ display: 'flex', gap: 4 }}>
@@ -261,7 +308,7 @@ export function QueuedMessage({
                 className="ghost"
                 style={QUEUE_BUTTON}
                 title="Back to the message box (Esc)"
-                onClick={() => unqueue(session.id)}
+                onClick={() => unqueue(entry).catch(fail)}
               >
                 Cancel
               </button>
@@ -269,10 +316,12 @@ export function QueuedMessage({
                 type="button"
                 className="ghost"
                 style={QUEUE_BUTTON}
-                title="Send now (⌘↩ with an empty message box)"
-                onClick={() => sendQueued(session, onError, onSent)}
+                title={failed ? 'Send again' : 'Send now (⌘↩ with an empty message box)'}
+                onClick={() =>
+                  mutate('sessions.queue_send', { session: session.id, interject: failed ? 0 : 1 }).catch(fail)
+                }
               >
-                Interrupt
+                {failed ? 'Retry' : 'Interrupt'}
               </button>
             </span>
           }
@@ -283,85 +332,54 @@ export function QueuedMessage({
 }
 
 /**
- * Message box for a session. Send (cmd-Enter) sends a follow-up, queued while Claude is working; the card must show the
- * queue with `QueuedMessage` and flush it with `useFlushQueues`. `onSent` gets each message as it
- * is sent, and `onQueued` is called when one is queued.
- * Files are attached by pasting, dropping or picking them.
+ * A rounded message box over drafts kept under `draft` and `files` (see `useDraft`). Files are attached by pasting,
+ * dropping or picking them, and show in the text as placeholders where they were added. Send (or ⌘↩) calls `onSend`,
+ * which clears the drafts when it takes the message; `button` replaces the send icon and `actions` sit before it.
  */
-export function Composer({
-  session,
+export function MessageBox({
+  draft,
+  files: filesKey,
+  placeholder: hint,
+  onSend,
   onError,
-  onSent,
-  onQueued,
+  onKeyDown,
+  button,
+  actions,
 }: {
-  session: Session
+  draft: string
+  files: string
+  placeholder: string
+  onSend: (prompt: string, files: Attachment[]) => void
   onError: (message: string) => void
-  onSent?: (prompt: string, files: string[]) => void
-  onQueued?: () => void
+  onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void
+  button?: ReactNode
+  actions?: ReactNode
 }) {
-  const [text, setText] = useDraft(draftKey(session.id))
-  const [queued, setQueued] = useDraft(queueKey(session.id))
-  const [filesDraft, setFilesDraft] = useDraft(filesKey(session.id))
-  const [queuedFilesDraft, setQueuedFiles] = useDraft(queuedFilesKey(session.id))
+  const [text, setText] = useDraft(draft)
+  const [filesDraft, setFilesDraft] = useDraft(filesKey)
   const [uploading, setUploading] = useState(0)
   const picker = useRef<HTMLInputElement>(null)
-  const files = parseFiles(filesDraft)
-  const queuedFiles = parseFiles(queuedFilesDraft)
-  const fail = (e: Error) => onError(e.message)
+  const box = useRef<HTMLTextAreaElement>(null)
   const attach = (list: FileList | null) => {
     if (!list?.length) return
+    const at = box.current?.selectionStart ?? text.length
+    setText(text.slice(0, at) + [...list].map(file => placeholder(file.name)).join(' ') + text.slice(at))
     setUploading(n => n + list.length)
     for (const file of list)
       upload(file)
-        .then(f => setFilesDraft(JSON.stringify([...parseFiles(read(filesKey(session.id))), f])))
-        .catch(fail)
+        .then(({ id }) => setFilesDraft(current => JSON.stringify([...parseFiles(current), { id, name: file.name }])))
+        .catch((e: Error) => onError(e.message))
         .finally(() => setUploading(n => n - 1))
   }
-  const detach = (f: Attachment) => {
-    setFilesDraft(JSON.stringify(files.filter(other => other.id !== f.id)))
-    mutate('sessions.detach', { id: f.id }).catch(fail)
-  }
   const send = () => {
-    const prompt = text.trim()
-    if (!prompt && !files.length) return sendQueued(session, onError, onSent)
-    if (uploading) return
-    setText('')
-    setFilesDraft('')
-    if (busy(session)) {
-      setQueued(queued && prompt ? `${queued}\n\n${prompt}` : queued || prompt)
-      if (files.length) setQueuedFiles(JSON.stringify([...queuedFiles, ...files]))
-      onQueued?.()
-    } else {
-      onSent?.(
-        prompt,
-        files.map(f => f.name),
-      )
-      followUp(session, prompt, files).catch(fail)
-    }
+    if (!uploading) onSend(text.trim(), parseFiles(filesDraft))
   }
   return (
-    <div>
-      {(files.length > 0 || uploading > 0) && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
-          {files.map(f => (
-            <span key={f.id} className="chip file">
-              <PaperclipIcon /> {f.name}
-              <button
-                type="button"
-                className="ghost icon small round"
-                aria-label={`Remove ${f.name}`}
-                onClick={() => detach(f)}
-              >
-                ×
-              </button>
-            </span>
-          ))}
-          {uploading > 0 && (
-            <span className="chip file">
-              <Spinner />
-            </span>
-          )}
-        </div>
+    <div style={{ flex: 1, minWidth: 0 }}>
+      {uploading > 0 && (
+        <span className="chip file" style={{ marginBottom: 6 }}>
+          <Spinner />
+        </span>
       )}
       <form
         className="composer"
@@ -392,7 +410,7 @@ export function Composer({
         />
         <button
           type="button"
-          className="ghost icon round"
+          className="ghost icon round attach"
           title="Attach files"
           aria-label="Attach files"
           onClick={() => picker.current?.click()}
@@ -400,33 +418,94 @@ export function Composer({
           <PaperclipIcon />
         </button>
         <textarea
+          ref={box}
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={e => {
             if (e.key === 'Enter' && e.metaKey) {
               e.preventDefault()
               send()
-            } else if (e.key === 'Escape' && (queued || queuedFiles.length)) {
-              e.preventDefault()
-              unqueue(session.id)
-            }
+            } else onKeyDown?.(e)
           }}
-          placeholder="Message Claude…"
+          placeholder={hint}
           autoComplete="off"
           enterKeyHint="enter"
           rows={1}
         />
+        {actions}
         <button
           type="submit"
-          className="primary icon round"
-          disabled={(!text.trim() && !files.length) || uploading > 0}
+          className={button ? 'primary round' : 'primary icon round'}
+          disabled={!text.trim() || uploading > 0}
           title="Send"
           aria-label="Send"
         >
-          <SendIcon />
+          {button ?? <SendIcon />}
         </button>
       </form>
     </div>
+  )
+}
+
+/**
+ * Message box for a session. Send (⌘↩) adds a follow-up to `sessions.queue`, which the desktop sends once Claude is neither
+ * working nor asking for a permission; the card must show the queue with `QueuedMessage`. `onQueued` is called for each
+ * message. Sending an empty box sends the queue now; Esc moves it back into the box.
+ */
+export function Composer({
+  session,
+  onError,
+  onQueued,
+}: {
+  session: Session
+  onError: (message: string) => void
+  onQueued?: () => void
+}) {
+  const queued = useOutbox(session.id).find(e => e.state !== 'sending')
+  const fail = (e: Error) => onError(e.message)
+  const send = (prompt: string, files: Attachment[]) => {
+    if (!prompt) {
+      if (queued) mutate('sessions.queue_send', { session: session.id, interject: 1 }).catch(fail)
+      return
+    }
+    const { text, attachments = '' } = withAttachments('text', prompt, files)
+    const ids = attachments.split(',')
+    setDraft(draftKey(session.id), '')
+    setDraft(filesKey(session.id), '')
+    mutate('sessions.queue_add', {
+      session: session.id,
+      text,
+      files: JSON.stringify(files.filter(f => ids.includes(f.id))),
+    }).catch(fail)
+    onQueued?.()
+  }
+  return (
+    <MessageBox
+      draft={draftKey(session.id)}
+      files={filesKey(session.id)}
+      placeholder="Message Claude…"
+      onSend={send}
+      onError={onError}
+      onKeyDown={e => {
+        if (e.key !== 'Escape' || !queued) return
+        e.preventDefault()
+        unqueue(queued).catch(fail)
+      }}
+      actions={
+        session.kind === 'background' &&
+        busy(session) && (
+          <button
+            type="button"
+            className="danger icon round"
+            title="Stop"
+            aria-label="Stop"
+            onClick={() => run('sessions.stop', { session: session.id }).catch((e: Error) => onError(e.message))}
+          >
+            <StopIcon />
+          </button>
+        )
+      }
+    />
   )
 }
 
@@ -443,6 +522,14 @@ function PaperclipIcon() {
       strokeLinejoin="round"
     >
       <path d="M13.5 7.5 8 13a3.5 3.5 0 0 1-5-5l5.5-5.5a2.3 2.3 0 0 1 3.3 3.3L6.3 11.3a1.2 1.2 0 0 1-1.7-1.7L9.5 4.7" />
+    </svg>
+  )
+}
+
+function StopIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+      <rect x="3" y="3" width="10" height="10" rx="2" />
     </svg>
   )
 }
@@ -504,7 +591,6 @@ export function DecisionPanel({
     margin: '6px 0',
     padding: 10,
     background: 'var(--raised)',
-    borderLeft: '3px solid var(--accent)',
     borderRadius: 8,
   }
 

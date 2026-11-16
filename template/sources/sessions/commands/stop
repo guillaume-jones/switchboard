@@ -1,0 +1,11 @@
+#!/bin/zsh
+# sessions.stop {session}: stops the turn Claude is working on, keeping the session: an interrupt for a session
+# Switchboard holds (sessions.serve), `claude stop` for a background session.
+fail() { print -r -- "{\"outcome\": \"failure\", \"summary\": $(print -r -- $1 | jq -Rs .)}"; exit 1 }
+run=$("$SWB" query sessions_served session=$SWB_ARG_SESSION | jq -r '.[0].run_id // empty')
+if [[ -n $run ]]; then
+  out=$("$SWB" run input $run '{"interrupt": true}' 2>&1) || fail $out
+else
+  out=$(claude stop ${SWB_ARG_SESSION[1,8]} 2>&1) || fail $out
+fi
+print -r -- '{"outcome": "success", "summary": "stopped"}'

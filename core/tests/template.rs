@@ -186,7 +186,7 @@ fn sessions_keep_the_last_message_and_pending_decisions() {
     let hook = |event: Value, run_id: Option<&str>| {
         let mut payload = json!({"session_id": "s1", "cwd": "/tmp"});
         payload.as_object_mut().unwrap().extend(event.as_object().unwrap().clone());
-        let params = json!({"payload": payload.to_string(), "host": "switchboard", "entrypoint": "sdk-cli"});
+        let params = json!({"payload": payload.to_string(), "host": "dev.zed.Zed", "entrypoint": "sdk-ts"});
         let origin = Origin { trigger: "swb".into(), run_id: run_id.map(String::from) };
         engine.write("sessions.claude_hook", params, origin).unwrap();
         engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0].clone()
@@ -219,6 +219,29 @@ fn sessions_keep_the_last_message_and_pending_decisions() {
     assert_eq!((recent(0), recent(1)), (0, 1));
     engine.write("sessions.unhide", json!({"id": "s1"}), card()).unwrap();
     assert_eq!((recent(0), recent(1)), (1, 0));
+}
+
+#[test]
+fn sessions_held_by_serve_are_live_until_the_run_ends() {
+    let (dir, engine, _rx) = template_home();
+    drop(engine);
+    let db = rusqlite::Connection::open(dir.path().join("home/data/core.db")).unwrap();
+    db.execute(
+        r#"INSERT INTO runs (id, command, args, state, pid, created_at, started_at) VALUES ('serve1', 'sessions.serve', '{"session": "s1"}', 'running', ?1, 0, 0)"#,
+        [std::process::id()],
+    )
+    .unwrap();
+    drop(db);
+    let (engine, _rx) = open(&dir.path().join("home"));
+    let payload = json!({"session_id": "s1", "cwd": "/tmp", "hook_event_name": "UserPromptSubmit", "prompt": "go"});
+    let params = json!({"payload": payload.to_string(), "host": "switchboard", "entrypoint": "sdk-cli"});
+    engine.write("sessions.claude_hook", params, Origin { trigger: "swb".into(), run_id: Some("serve1".into()) }).unwrap();
+    let session = &engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0];
+    assert_eq!((&session["status"], &session["kind"], &session["live"]), (&json!("working"), &json!("background"), &json!(1)));
+    assert_eq!(engine.query("sessions_served", json!({})).unwrap(), json!([{"session": "s1", "run_id": "serve1", "cwd": null}]));
+    engine.finish_run("serve1", true, None).unwrap();
+    let session = &engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0];
+    assert_eq!((&session["status"], &session["kind"], &session["live"]), (&json!("ready"), &json!("background"), &json!(0)));
 }
 
 #[test]

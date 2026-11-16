@@ -1,0 +1,25 @@
+#!/bin/zsh
+# sessions.flush {session, queued_at}: sends a session's queued follow-up with sessions.send, once. The queue is moved to
+# sessions.sending first, so follow-ups queued meanwhile wait for this one's turn to end (see sessions_flushable). On
+# failure it goes back to the queue, ahead of anything queued since, with the error.
+session=$SWB_ARG_SESSION
+"$SWB" write sessions.queue_take session=$session queued_at=$SWB_ARG_QUEUED_AT >/dev/null || exit 1
+row=$("$SWB" query sessions_outbox session=$session state=sending | jq -c --arg run "$RUN_ID" '[.[] | select(.run_id == $run)][0] // empty')
+[[ -n $row ]] || { print '{"outcome": "success", "summary": "already sent"}'; exit 0 }
+sent() { "$SWB" write sessions.queue_sent session=$session state=$1 error=${2:-} >/dev/null }
+trap 'sent failed "timed out"; exit 1' TERM
+working=$("$SWB" query sessions_items id=$session | jq -r '.[0].status == "working"')
+out=$(
+  SWB_ARG_TEXT=$(jq -r .text <<<$row) \
+  SWB_ARG_ATTACHMENTS=$(jq -r '.attachments // empty' <<<$row) \
+  SWB_ARG_INTERJECT=$([[ $working == true && $(jq -r .interject <<<$row) == 1 ]] && print 1) \
+  "$SOURCE_DIR/commands/send"
+)
+code=$?
+result=${out##*$'\n'}
+summary=$(jq -r '.summary // empty' <<<$result 2>/dev/null)
+if (( code )); then sent failed "${summary:-$out}"
+elif [[ $summary == "ran "* ]]; then sent delivered
+else sent sent; fi
+print -r -- $result
+exit $code

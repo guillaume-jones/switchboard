@@ -1,7 +1,8 @@
 #!/bin/zsh
-# PermissionRequest hook: records the request, then waits for an answer from Switchboard (sessions.decide).
-# Exits without a decision, leaving it to the session's own prompt, once the request is answered elsewhere or
-# superseded, Claude Code's process is gone, or Switchboard cannot be reached.
+# PermissionRequest hook: records the request, then waits for an answer from Switchboard (sessions.decide), which
+# sessions.answer writes into the FIFO data/decisions/<session>. Exits without a decision, leaving it to the session's
+# own prompt, once the request is answered elsewhere or superseded, Claude Code's process is gone, or Switchboard
+# cannot be reached. Checks those every 5s; the answer itself arrives at once.
 path+=(/usr/local/bin /Applications/Switchboard.app/Contents/MacOS)
 swb=${SWB:-swb}
 payload=$(cat)
@@ -9,16 +10,22 @@ print -r -- $payload | /bin/dash "${0:h}/hook" || exit 0
 session=$(print -r -- $payload | jq -r .session_id)
 mine=$("$swb" query sessions_items id=$session | jq -r '.[0].decision | fromjson? | .at // empty') || exit 0
 [[ -n $mine ]] || exit 0
-zmodload zsh/zselect
+fifo=${SWITCHBOARD_HOME:-$HOME/.switchboard}/data/decisions/$session
+mkdir -p ${fifo:h} && rm -f $fifo && mkfifo $fifo || exit 0
+trap 'rm -f $fifo' EXIT
+exec 3<>$fifo
 while :; do
-  zselect -t 100
+  if read -r -t 5 -u 3 out; then
+    [[ $(print -r -- $out | jq -r .at) == $mine ]] || continue
+    print -r -- $out | jq -c 'del(.at)'
+    exit 0
+  fi
   [[ -z $CLAUDE_PID ]] || kill -0 $CLAUDE_PID 2>/dev/null || exit 0
   out=$("$swb" query sessions_items id=$session | jq -c --arg mine $mine '.[0]
     | (.decision | fromjson? // {}) as $decision | (.answer | fromjson? // null) as $answer
     | if ($decision.at // "" | tostring) != $mine then "superseded"
       elif $answer == null then empty
-      else {hookSpecificOutput: {hookEventName: "PermissionRequest",
-        decision: (if $answer.behavior == "allow" then {updatedInput: $decision.tool_input} + $answer else $answer end)}}
+      else {hookSpecificOutput: {hookEventName: "PermissionRequest", decision: $answer}}
       end') || exit 0
   [[ -n $out ]] || continue
   [[ $out == '"superseded"' ]] || print -r -- $out

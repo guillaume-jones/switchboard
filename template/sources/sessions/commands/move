@@ -1,0 +1,14 @@
+#!/bin/zsh
+# sessions.move {session, cwd}: makes the session resume in cwd (~/ expanded; a bare name means that folder under
+# ~/Documents) from its next message or open on. Claude keeps the conversation and adopts the new folder on resume.
+finish() {
+  local s=${2//\\/\\\\}; s=${s//\"/\\\"}; s=${s//[[:cntrl:]]/ }
+  print -r -- "{\"outcome\": \"$1\", \"summary\": \"$s\"}"
+  [[ $1 == success ]]; exit
+}
+cwd=${SWB_ARG_CWD/#\~/$HOME}
+[[ $cwd != /* && -d $HOME/Documents/$cwd ]] && cwd=$HOME/Documents/$cwd
+[[ $cwd == /* && -d $cwd ]] || finish failure "no folder $SWB_ARG_CWD"
+cwd=${cwd:A}
+"$SWB" write sessions.move id=$SWB_ARG_SESSION cwd=$(print -r -- $cwd | jq -Rr @json) >/dev/null || finish failure "write failed"
+finish success "moved to $cwd"

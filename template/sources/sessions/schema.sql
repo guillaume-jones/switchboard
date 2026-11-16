@@ -28,7 +28,8 @@ CREATE TABLE messages (
   session TEXT NOT NULL,
   at TEXT NOT NULL,
   role TEXT NOT NULL,
-  text TEXT NOT NULL
+  text TEXT NOT NULL,
+  tokens INTEGER
 );
 CREATE INDEX messages_session ON messages (session, at);
 
@@ -55,4 +56,46 @@ CREATE TABLE agents (
   live INTEGER NOT NULL,
   started_at INTEGER,
   changed_at INTEGER NOT NULL
+);
+
+-- Follow-ups waiting to be sent by the sessions-flush rule, one merged message per session.
+CREATE TABLE queue (
+  session TEXT PRIMARY KEY NOT NULL,
+  text TEXT NOT NULL,
+  files TEXT NOT NULL,
+  interject INTEGER NOT NULL,
+  queued_at INTEGER NOT NULL,
+  error TEXT
+);
+
+-- The follow-up sessions.flush took from the queue, kept until its turn ends so the next one waits for it.
+CREATE TABLE sending (
+  session TEXT PRIMARY KEY NOT NULL,
+  text TEXT NOT NULL,
+  files TEXT NOT NULL,
+  interject INTEGER NOT NULL,
+  run_id TEXT,
+  started_at INTEGER NOT NULL,
+  sent_at INTEGER,
+  acked INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE drafts (
+  key TEXT PRIMARY KEY NOT NULL,
+  text TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- Titles set by hand, overriding the derived one.
+CREATE TABLE titles (
+  session TEXT PRIMARY KEY NOT NULL,
+  title TEXT NOT NULL,
+  renamed_at INTEGER NOT NULL
+);
+
+-- Folders chosen by hand: the next resume (sessions.send, sessions.open) runs there. Cleared once a hook reports the session in it.
+CREATE TABLE folders (
+  session TEXT PRIMARY KEY NOT NULL,
+  cwd TEXT NOT NULL,
+  moved_at INTEGER NOT NULL
 );

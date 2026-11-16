@@ -16,7 +16,7 @@ const clamp = (value: number, min: number, max: number) => Math.min(Math.max(val
 const sameGeometry = (a: Geometry, b: Geometry) => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h
 
 /** Sized by its content, up to most of the screen, so cards that scroll internally still fit. */
-const LIST_TILE: CSSProperties = { height: undefined, maxHeight: '85dvh' }
+const LIST_TILE: CSSProperties = { height: 'auto', maxHeight: '85dvh' }
 const TOOLBAR: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 8, padding: `2px ${GAP}px 6px` }
 /** A corner grip drawn inside the tile's bottom-right corner, with a larger hit area than it looks. */
 const RESIZE_HANDLE: CSSProperties = {
@@ -118,7 +118,14 @@ export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?
 
   if (layout === 'list') {
     return (
-      <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div
+        style={{
+          padding: '10px 10px calc(32px + var(--bottom-edge, 0px))',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+        }}
+      >
         {toolbar}
         {tiles.length === 0 && <div className="empty">No cards on this board</div>}
         {tiles.map(tile => (

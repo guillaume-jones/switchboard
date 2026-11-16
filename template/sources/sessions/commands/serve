@@ -109,8 +109,11 @@ while True:
     command += ["--model", args["model"]] if args.get("model") else []
     command += ["--disallowedTools", *args["disallowed"].split()] if args.get("disallowed") else []
     try:
-        claude = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  env={**os.environ, "SWB_SESSION_HOST": "switchboard"})
+        # SWB_HELD_PID is Claude's own pid once sh execs it, so files/hook skips this process's hooks but not those of
+        # sessions it starts, which neither inherit this run as theirs.
+        env = {k: v for k, v in os.environ.items() if k not in ("RUN_ID", "SWB_SESSION_HOST")}
+        claude = subprocess.Popen(["/bin/sh", "-c", 'SWB_HELD_PID=$$ exec "$@"', "sh", *command], cwd=cwd,
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env)
     except OSError as e:
         finish("failure", f"cannot start claude in {cwd}: {e}")
     out = Lines(claude.stdout.fileno())

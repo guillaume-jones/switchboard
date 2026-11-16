@@ -7,6 +7,6 @@ WHERE q.error IS NULL
   AND NOT EXISTS (
     SELECT 1 FROM sessions.sending AS s
     WHERE s.session = q.session
-      AND iif(s.sent_at IS NULL, s.started_at, iif(sv.run_id IS NOT NULL, iif(s.acked, NULL, s.sent_at), iif(q.interject, NULL, s.sent_at)))
+      AND iif(s.sent_at IS NULL, s.started_at, iif(q.interject OR sv.run_id IS NOT NULL, NULL, s.sent_at))
         > CAST(unixepoch('subsec') * 1000 AS INTEGER) - 300000
   )

@@ -73,9 +73,9 @@ fn notified(rx: &Receiver<(String, Value)>, wait: Duration) -> Vec<Value> {
 #[test]
 fn attention_notifies_once_per_item() {
     let (_dir, engine, rx) = template_home();
-    engine.write("attention.raise", json!({"ref": "x:1", "reason": "test", "level": 2}), card()).unwrap();
-    engine.write("attention.raise", json!({"ref": "x:1", "reason": "again", "level": 2}), card()).unwrap();
-    engine.write("attention.raise", json!({"ref": "x:2", "reason": "quiet", "level": 1}), card()).unwrap();
+    engine.write("attention.raise", json!({"title": "", "ref": "x:1", "reason": "test", "level": 2}), card()).unwrap();
+    engine.write("attention.raise", json!({"title": "", "ref": "x:1", "reason": "again", "level": 2}), card()).unwrap();
+    engine.write("attention.raise", json!({"title": "", "ref": "x:2", "reason": "quiet", "level": 1}), card()).unwrap();
     let open = until(&engine, "attention_open", json!({}), 5, |r| r.len() == 2);
     assert_eq!(open[0]["reason"], "again");
     let notifications = notified(&rx, Duration::from_millis(500));
@@ -91,7 +91,7 @@ fn attention_snoozes_and_wakes_on_its_schedule() {
     until(&engine, "core_rules", json!({"rule": "attention-wake"}), 5, |r| {
         r.first().is_some_and(|r| r["last_evaluated"].is_string())
     });
-    engine.write("attention.raise", json!({"ref": "x:1", "reason": "test", "level": 1}), card()).unwrap();
+    engine.write("attention.raise", json!({"title": "", "ref": "x:1", "reason": "test", "level": 1}), card()).unwrap();
     engine.write("attention.snooze", json!({"ref": "x:1", "until": now_ms()}), card()).unwrap();
     assert_eq!(engine.query("attention_items", json!({"ref": "x:1"})).unwrap()[0]["state"], "snoozed");
     assert_eq!(engine.query("attention_open", json!({})).unwrap(), json!([]));
@@ -105,13 +105,13 @@ fn attention_notifies_again_after_waking() {
     until(&engine, "core_rules", json!({"rule": "attention-wake"}), 5, |r| {
         r.first().is_some_and(|r| r["last_evaluated"].is_string())
     });
-    engine.write("attention.raise", json!({"ref": "x:1", "reason": "test", "level": 2}), card()).unwrap();
+    engine.write("attention.raise", json!({"title": "", "ref": "x:1", "reason": "test", "level": 2}), card()).unwrap();
     assert_eq!(notified(&rx, Duration::from_millis(500)).len(), 1);
     engine.write("attention.snooze", json!({"ref": "x:1", "until": now_ms()}), card()).unwrap();
     engine.tick(now_ms() + 61_000);
     until(&engine, "attention_open", json!({"ref": "x:1"}), 5, |r| r.len() == 1);
     assert_eq!(notified(&rx, Duration::from_millis(500)).len(), 1);
-    engine.write("attention.raise", json!({"ref": "x:1", "reason": "again", "level": 2}), card()).unwrap();
+    engine.write("attention.raise", json!({"title": "", "ref": "x:1", "reason": "again", "level": 2}), card()).unwrap();
     assert_eq!(notified(&rx, Duration::from_millis(500)).len(), 0);
 }
 
@@ -126,7 +126,7 @@ fn attention_is_raised_for_blocked_firings() {
             ("sources/t/writes/add.sql", "INSERT INTO t.items (id) VALUES (:id)"),
             (
                 "rules/t.json",
-                r#"{"id": "t", "when": {"view": "t_items"}, "key": "{id}", "into": "attention.raise", "args": {"ref": "t:{id}", "reason": "x", "level": 1}, "max_per_hour": 1}"#,
+                r#"{"id": "t", "when": {"view": "t_items"}, "key": "{id}", "into": "attention.raise", "args": {"ref": "t:{id}", "title": "", "reason": "x", "level": 1}, "max_per_hour": 1}"#,
             ),
         ],
     );
@@ -167,7 +167,6 @@ fn sessions_track_claude_hooks_and_interrupts() {
     }
     let session = &engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0];
     assert_eq!((session["title"].as_str(), session["host"].as_str()), (Some("fix the build"), Some("dev.zed.Zed")));
-    assert_eq!(session["owned"], 0);
 
     let line = |kind: &str, text: &str| {
         json!({"type": kind, "sessionId": "s1", "message": {"role": kind, "content": [{"type": "text", "text": text}]}})
@@ -194,10 +193,9 @@ fn sessions_keep_the_last_message_and_pending_decisions() {
     };
     hook(json!({"hook_event_name": "UserPromptSubmit", "prompt": "investigate"}), Some("run1"));
     let session = hook(json!({"hook_event_name": "Stop", "last_assistant_message": "Found it."}), None);
-    assert_eq!((session["last_message"].as_str(), session["run_id"].as_str()), (Some("Found it."), Some("run1")));
-    assert_eq!(session["owned"], 1);
+    assert_eq!(session["last_message"], "Found it.");
     let session = hook(json!({"hook_event_name": "UserPromptSubmit", "prompt": "again"}), Some("run2"));
-    assert_eq!((session["last_message"].as_str(), session["run_id"].as_str()), (Some("Found it."), Some("run2")));
+    assert_eq!(session["last_message"], "Found it.");
     assert_eq!((session["title"].as_str(), session["last_prompt"].as_str()), (Some("investigate"), Some("again")));
 
     let request = json!({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "ls"}});

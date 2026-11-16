@@ -1,0 +1,5 @@
+#!/bin/zsh
+# sessions.reveal {path}: opens an attached file (under data/attachments) in its default app.
+path_=${SWB_ARG_PATH:A}
+[[ $path_ == $SWITCHBOARD_HOME/data/attachments/* && -f $path_ ]] || { print -u2 "not an attachment: $SWB_ARG_PATH"; exit 1 }
+open $path_

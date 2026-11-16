@@ -4,5 +4,6 @@
   { "key": "alt-j", "command": "card.focus_next" },
   { "key": "alt-k", "command": "card.focus_prev" },
   { "key": "ctrl-tab", "context": "card:Boards", "write": "ui.next_board", "args": { "client": "{client}" } },
+  { "key": "cmd-w", "context": "card:Boards", "write": "ui.close_board", "args": { "id": "{board}" } },
   { "key": "ctrl-shift-tab", "context": "card:Boards", "write": "ui.prev_board", "args": { "client": "{client}" } }
 ]

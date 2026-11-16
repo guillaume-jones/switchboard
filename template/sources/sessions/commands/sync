@@ -1,0 +1,3 @@
+#!/bin/zsh
+# sessions.sync: prints Claude Code's sessions (`claude agents --json --all`) for sessions.agents_sync.
+exec claude agents --json --all

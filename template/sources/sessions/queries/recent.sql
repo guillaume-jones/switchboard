@@ -1,4 +1,4 @@
-SELECT id, title, status, cwd, run_id, host, owned, last_message, last_prompt, decision, run_state, run_command, updated
+SELECT id, title, status, cwd, host, kind, short_id, live, last_message, last_prompt, decision, updated, hidden
 FROM sessions_items
-WHERE (id IN (SELECT session FROM sessions.hidden)) = :hidden
+WHERE hidden = :hidden
 LIMIT :limit

@@ -1,1 +1,1 @@
-{ "timeouts": { "edit": 1800, "headless": 1800, "poke": 120 } }
+{ "timeouts": { "start": 60, "send": 120, "poke": 120 }, "queue_expiry": { "reveal": 0 } }

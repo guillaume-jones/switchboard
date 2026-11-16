@@ -184,7 +184,7 @@ impl Diagnostics {
     }
 }
 
-/// A source's files by path relative to its folder, except `files/`, which is not loaded.
+/// A source's files by path relative to its folder; of `files/`, only the top level, to find views its scripts query.
 struct SourceFiles {
     name: String,
     /// Shown in diagnostics.
@@ -275,6 +275,7 @@ fn load_scoped(home: &Path, mode: Mode, scope: Scope) -> Result<Loaded, Vec<Diag
         .flat_map(|s| s.files.iter())
         .filter(|(rel, _)| {
             rel.starts_with("commands/")
+                || rel.starts_with("files/")
                 || (rel.starts_with("rules/") && rel.ends_with(".json"))
                 || *rel == "source.json"
         })
@@ -359,7 +360,7 @@ fn read_sources(home: &Path, scope: Scope, diags: &mut Diagnostics) -> Vec<Sourc
                 files.insert(rel.to_string(), read_lossy(&file));
             }
         }
-        for sub in ["views", "queries", "writes", "rules", "commands"] {
+        for sub in ["views", "queries", "writes", "rules", "commands", "files"] {
             for (file, file_path) in crate::sorted_entries(&path.join(sub)).into_iter().filter(|(_, p)| p.is_file()) {
                 files.insert(format!("{sub}/{file}"), read_lossy(&file_path));
             }

@@ -1,5 +1,5 @@
 #!/bin/zsh
-# sessions.poke {session, text}: sends text to a running Claude session through its messaging socket, using a headless
+# sessions.poke {session, text, attachments?}: sends text to a running Claude session through its messaging socket, using a headless
 # Haiku session's SendMessage tool. Reaches sessions started anywhere, busy or idle; the message is marked as coming from
 # Switchboard on the user's behalf.
 finish() {
@@ -7,12 +7,17 @@ finish() {
   print -r -- "{\"outcome\": \"$1\", \"summary\": \"$s\"}"
   [[ $1 == success ]]; exit
 }
-[[ -n $SWB_ARG_TEXT ]] || finish failure "text is required"
+text=$SWB_ARG_TEXT
+if [[ -n $SWB_ARG_ATTACHMENTS ]]; then
+  attached=$("$SOURCE_DIR/files/attach" $SWB_ARG_ATTACHMENTS 2>&1) || finish failure "$attached"
+  text=${text:+$text$'\n\n'}$attached
+fi
+[[ -n $text ]] || finish failure "text is required"
 socket=$(jq -r --arg id "$SWB_ARG_SESSION" 'select(.sessionId == $id) | .messagingSocketPath // empty' ~/.claude/sessions/*.json 2>/dev/null | head -1)
 [[ -n $socket ]] || finish failure "session $SWB_ARG_SESSION is not running"
 message="Message from Switchboard, sent on behalf of the user from the Switchboard app. No reply is needed: replies are not read.
 
-$SWB_ARG_TEXT"
+$text"
 instruction="Call SendMessage exactly once, with to set to uds:$socket and message set to the text between the markers, verbatim. Do nothing else.
 <<<MESSAGE
 $message

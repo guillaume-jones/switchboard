@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type ReactNode } from 'react'
+import { useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import { Item, mutate, useQuery } from 'switchboard'
 
 type AttentionItem = { id: number; ref: string; reason: string | null; level: number }
@@ -26,11 +26,21 @@ const POPOVER: CSSProperties = {
   boxShadow: '0 16px 48px #000b',
   zIndex: 1,
 }
+const subscribeToConnection = (onChange: () => void) => {
+  window.addEventListener('online', onChange)
+  window.addEventListener('offline', onChange)
+  return () => {
+    window.removeEventListener('online', onChange)
+    window.removeEventListener('offline', onChange)
+  }
+}
 const BACKDROP: CSSProperties = { position: 'fixed', inset: 0, background: '#0008' }
 const SUMMARY_BUTTON: CSSProperties = {
   border: 'none',
   background: 'none',
-  padding: '0 2px',
+  display: 'inline-flex',
+  gap: 6,
+  alignItems: 'center',
   fontWeight: 600,
   opacity: 1,
 }
@@ -44,6 +54,7 @@ export default function Health() {
   const clearedThrough = useQuery<{ through: number }>('attention_errors_cleared')?.[0]?.through ?? 0
   const errors = recentErrors.filter(event => event.id > clearedThrough)
   const [open, setOpen] = useState(false)
+  const online = useSyncExternalStore(subscribeToConnection, () => navigator.onLine)
 
   const problems = [
     { count: attention.length, one: 'attention item', many: 'attention items' },
@@ -51,17 +62,26 @@ export default function Health() {
     { count: unknownRuns.length, one: 'unknown run', many: 'unknown runs' },
     { count: errors.length, one: 'error', many: errors.length < RECENT_ERRORS ? 'errors' : 'recent errors' },
   ].filter(problem => problem.count > 0)
-  const healthy = problems.length === 0
+  const healthy = online && problems.length === 0
   const failures = disabledRules.length + unknownRuns.length + errors.length
   const summary = healthy
     ? 'healthy'
-    : problems.map(({ count, one, many }) => `${count} ${count === 1 ? one : many}`).join(' · ')
+    : [
+        ...(online ? [] : ['offline']),
+        ...problems.map(({ count, one, many }) => `${count} ${count === 1 ? one : many}`),
+      ].join(' · ')
 
   const details = (
     <div style={{ padding: '8px 12px' }}>
       {healthy && (
         <div className="empty">
           <span style={{ color: 'var(--good)' }}>●</span> All healthy
+        </div>
+      )}
+      {!online && (
+        <div style={LINE}>
+          <span style={{ color: 'var(--bad)' }}>●</span>
+          <span>Offline: showing the last data seen; writes and runs are queued until reconnected</span>
         </div>
       )}
       <Section title="Attention">
@@ -116,8 +136,9 @@ export default function Health() {
 
   return (
     <span style={{ position: 'relative' }}>
-      <button onClick={() => setOpen(isOpen => !isOpen)} title={summary} style={SUMMARY_BUTTON}>
+      <button onClick={() => setOpen(isOpen => !isOpen)} title={summary} className="health" style={SUMMARY_BUTTON}>
         {healthy && <span style={{ color: 'var(--good)' }}>●</span>}
+        {!online && <span style={{ color: 'var(--bad)' }}>● offline</span>}
         {attention.length > 0 && (
           <span style={{ color: attentionColor(Math.max(...attention.map(item => item.level))) }}>
             ● {attention.length}

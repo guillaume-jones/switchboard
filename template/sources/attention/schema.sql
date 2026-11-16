@@ -2,6 +2,7 @@ CREATE TABLE items (
   id INTEGER PRIMARY KEY,
   ref TEXT NOT NULL,
   reason TEXT,
+  title TEXT,
   level INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
   cleared_at INTEGER,

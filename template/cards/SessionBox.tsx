@@ -1,75 +1,98 @@
-import { useState, type CSSProperties } from 'react'
+import { useEffect, useState } from 'react'
 import { run, useQuery, type CardProps } from 'switchboard'
+import { SendIcon, Spinner, useDraft } from './lib/sessions'
 
-type Run = { id: string; state: string; summary: string | null }
-type Session = { id: string; status: string }
-
-const STATUS: CSSProperties = {
-  color: 'var(--muted)',
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  maxWidth: '100%',
-}
-
-/** Starts a Switchboard-owned Claude session: `sessions.edit` on this folder, or `sessions.headless` in another one. */
-export default function SessionBox({ slot }: CardProps) {
-  const storageKey = `SessionBox.run.${slot}`
-  const [prompt, setPrompt] = useState('')
-  const [cwd, setCwd] = useState('')
-  const [runId, setRunId] = useState(() => localStorage.getItem(storageKey))
+/** Starts a background Claude session (`sessions.start`) in this folder or the one given, showing why if it fails. */
+export default function SessionBox(_: CardProps) {
+  const [prompt, setPrompt] = useDraft('SessionBox.prompt')
+  const [cwd, setCwd] = useDraft('SessionBox.cwd')
+  const [starting, setStarting] = useState(false)
+  const [runId, setRunId] = useState<string>()
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!runId) return
+    const timer = setTimeout(() => setRunId(undefined), 3000)
+    return () => clearTimeout(timer)
+  }, [runId])
 
   return (
     <form
       style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', flex: 1 }}
       onKeyDown={e => {
-        if (e.key === 'Enter' && e.metaKey) {
-          e.preventDefault()
-          e.currentTarget.requestSubmit()
-        }
+        if (e.key !== 'Enter') return
+        if (e.metaKey) e.currentTarget.requestSubmit()
+        if (e.metaKey || e.target instanceof HTMLInputElement) e.preventDefault()
       }}
       onSubmit={e => {
         e.preventDefault()
-        if (!prompt.trim()) return
-        const started = cwd.trim()
-          ? run('sessions.headless', { prompt, cwd: cwd.trim() })
-          : run('sessions.edit', { prompt })
-        started.then(
-          id => {
-            localStorage.setItem(storageKey, id)
-            setRunId(id)
-            setPrompt('')
-            setError('')
-          },
-          (failure: Error) => setError(failure.message),
-        )
+        if (!prompt.trim() || starting) return
+        setStarting(true)
+        setError('')
+        run('sessions.start', { prompt, cwd: cwd.trim() })
+          .then(
+            id => setRunId(id),
+            (failure: Error) => setError(failure.message),
+          )
+          .finally(() => setStarting(false))
       }}
     >
-      <input
+      <textarea
         value={prompt}
         onChange={e => setPrompt(e.target.value)}
         placeholder={cwd.trim() ? `Ask Claude in ${cwd.trim()}` : 'Ask Claude to change this app'}
-        style={{ flex: '1 1 240px' }}
+        autoComplete="off"
+        enterKeyHint="enter"
+        rows={1}
+        style={{ flex: '1 1 100%' }}
       />
       <input
         value={cwd}
         onChange={e => setCwd(e.target.value)}
         placeholder="Folder (default: this app)"
-        style={{ flex: '0 1 200px', minWidth: 0 }}
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        style={{ flex: '1 1 0', minWidth: 0 }}
       />
-      <button type="submit" className="primary" disabled={!prompt.trim()}>
-        Start session
+      <button
+        type="submit"
+        className={runId ? 'primary' : 'primary icon'}
+        disabled={!prompt.trim() || starting}
+        title="Send"
+        aria-label="Send"
+      >
+        {starting ? (
+          <Spinner />
+        ) : runId ? (
+          <Outcome runId={runId} onSuccess={() => setPrompt('')} onFailure={setError} />
+        ) : (
+          <SendIcon />
+        )}
       </button>
-      {error ? <span style={{ color: 'var(--bad)' }}>{error}</span> : runId && <Status runId={runId} />}
+      {error && <span style={{ color: 'var(--bad)' }}>{error}</span>}
     </form>
   )
 }
 
-function Status({ runId }: { runId: string }) {
-  const latestRun = useQuery<Run>('core_runs', { id: runId })?.[0]
-  const session = useQuery<Session>('sessions_items', { run_id: runId })?.[0]
-  return (
-    <span style={STATUS}>{[latestRun?.state, session?.status, latestRun?.summary].filter(Boolean).join(' · ')}</span>
-  )
+type Run = { state: string; summary: string | null }
+
+function Outcome({
+  runId,
+  onSuccess,
+  onFailure,
+}: {
+  runId: string
+  onSuccess: () => void
+  onFailure: (message: string) => void
+}) {
+  const started = useQuery<Run>('core_runs', { id: runId })?.[0]
+  useEffect(() => {
+    if (started?.state === 'success' || (!started && !navigator.onLine)) onSuccess()
+    if (started?.state === 'failure') onFailure(started.summary ?? 'Could not start the session')
+  }, [started?.state])
+  if (!started) return navigator.onLine ? <Spinner /> : <>Queued</>
+  if (started.state === 'running') return <Spinner />
+  return <>{started.state === 'success' ? 'Started' : 'Failed'}</>
 }

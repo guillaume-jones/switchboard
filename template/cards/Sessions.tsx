@@ -1,337 +1,110 @@
-import { useEffect, useState, type CSSProperties } from 'react'
-import { CardSlot, mutate, run, useQuery, type CardProps } from 'switchboard'
-import { renderMarkdown } from './lib/markdown'
-import { busy, Composer, followUp, Spinner, type Session } from './lib/sessions'
+import { useState, type CSSProperties } from 'react'
+import { CardSlot, mutate, useQuery, type CardProps } from 'switchboard'
+import { TONES, useFlushQueues, type Session } from './lib/sessions'
+import { useMobile } from './lib/theme'
 
-type Decision = { tool_name: string; tool_input: Record<string, any>; at: number }
-type Question = {
-  question: string
-  header?: string
-  options: { label: string; description?: string }[]
-  multiSelect?: boolean
+const ROW: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '8px 10px',
+  borderBottom: '1px solid var(--border)',
 }
-
-const ROW: CSSProperties = { padding: '8px 10px', borderBottom: '1px solid var(--border)' }
-const MUTED: CSSProperties = { color: 'var(--muted)' }
-const MESSAGE: CSSProperties = { margin: '4px 0', maxHeight: 160, overflow: 'auto' }
-const WAITING = ['needs_permission', 'needs_input']
-const TONES: Record<string, string> = { working: 'info', needs_permission: 'accent', needs_input: 'accent' }
-const HEADER: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: '4px 8px', alignItems: 'center' }
-const ACTIONS: CSSProperties = { display: 'flex', gap: 4, alignItems: 'center', marginLeft: 'auto' }
-
-const HOSTS: Record<string, string> = {
-  switchboard: 'Switchboard',
-  'dev.zed.Zed': 'Zed',
-  'com.mitchellh.ghostty': 'Ghostty',
-  'com.apple.Terminal': 'Terminal',
-  'com.googlecode.iterm2': 'iTerm',
-  ghostty: 'Ghostty',
-  zed: 'Zed',
-  vscode: 'VS Code',
-  WezTerm: 'WezTerm',
-}
+const ELLIPSIS: CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 
 /**
- * Claude sessions: status, last prompt and reply, decisions to answer, follow-ups (owned sessions) or pokes (others).
- * Transcript opens a `Transcript` tile on the grid this card is in (its slot is `<grid>/<tile>`), else inline. Rows
- * start collapsed to their header (expanded rows are kept per card in localStorage) and can be hidden (`sessions.hide`) until unhidden.
+ * The Ask Claude box over recent Claude sessions: title, folder, time and status, with a click showing the session's
+ * `Transcript` in a tab of its own. Also sends queued follow-ups, so they go out after their transcript tab is left.
  */
-export default function Sessions({ limit = 30, slot }: CardProps<{ limit?: number }>) {
-  const grid = slot?.includes('/') ? slot.split('/')[0] : undefined
-  const [showHidden, setShowHidden] = useState(false)
-  const sessions = useQuery<Session>('sessions.recent', { limit, hidden: showHidden ? 1 : 0 }) ?? []
-  const expandedKey = `Sessions.expanded.${slot}`
-  const [expanded, setExpanded] = useState<string[]>(() => JSON.parse(localStorage.getItem(expandedKey) ?? '[]'))
-  const toggleExpanded = (id: string) => {
-    const next = expanded.includes(id) ? expanded.filter(e => e !== id) : [...expanded, id]
-    localStorage.setItem(expandedKey, JSON.stringify(next))
-    setExpanded(next)
-  }
-  const [queued, setQueued] = useState<Record<string, string>>({})
-  /**
-   * Follow-ups just sent, shown with a spinner until the session has received the prompt and stopped working, or for at
-   * most a minute in case the run fails before Claude starts.
-   */
-  const [sent, setSent] = useState<Record<string, string>>({})
+export default function Sessions({ limit = 30 }: CardProps<{ limit?: number }>) {
+  const client = useMobile() ? 'mobile' : 'desktop'
+  const [showArchived, setShowArchived] = useState(false)
+  const sessions = useQuery<Session>('sessions.recent', { limit, hidden: 0 }) ?? []
+  const archived = useQuery<Session>('sessions.recent', { limit: showArchived ? limit : 0, hidden: 1 }) ?? []
   const [error, setError] = useState('')
-  const markSent = (session: Session, prompt: string) => {
-    setSent(s => ({ ...s, [session.id]: prompt }))
-    setTimeout(() => setSent(({ [session.id]: _, ...rest }) => rest), 60_000)
-  }
 
-  useEffect(() => {
-    const settled = sessions.filter(session => sent[session.id] === session.last_prompt && session.status !== 'working')
-    if (settled.length)
-      setSent(s => Object.fromEntries(Object.entries(s).filter(([id]) => !settled.some(x => x.id === id))))
-  }, [sessions, sent])
+  useFlushQueues(sessions, setError)
 
-  useEffect(() => {
-    for (const session of sessions) {
-      const prompt = queued[session.id]
-      if (prompt === undefined || busy(session)) continue
-      setQueued(({ [session.id]: _, ...rest }) => rest)
-      followUp(session, prompt).then(
-        () => markSent(session, prompt),
-        (e: Error) => setError(e.message),
-      )
-    }
-  }, [sessions, queued])
+  const fail = (e: Error) => setError(e.message)
+  const open = (session: Session) =>
+    mutate('ui.open_board', {
+      client,
+      id: `transcript-${session.id}`,
+      title: session.title,
+      component: 'Transcript',
+      props: JSON.stringify({ session: session.id }),
+    }).catch(fail)
+
+  const row = (session: Session, isArchived: boolean) => (
+    <div
+      key={session.id}
+      role="button"
+      tabIndex={0}
+      style={{ ...ROW, cursor: 'pointer', opacity: isArchived ? 0.7 : 1 }}
+      onClick={() => open(session)}
+      onKeyDown={e => e.key === 'Enter' && open(session)}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ ...ELLIPSIS, fontWeight: 600 }}>{session.title}</div>
+        <div
+          style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 2, color: 'var(--muted)', fontSize: 12 }}
+        >
+          <span className="badge" data-tone={TONES[session.status]}>
+            {session.status.replace('_', ' ')}
+          </span>
+          <span title={session.cwd ?? undefined} style={ELLIPSIS}>
+            {session.cwd?.split('/').pop() || 'No folder'} · {session.updated}
+          </span>
+        </div>
+      </div>
+      <button
+        title={isArchived ? 'Unarchive' : 'Archive'}
+        aria-label={isArchived ? 'Unarchive' : 'Archive'}
+        className="ghost icon small"
+        onClick={e => {
+          e.stopPropagation()
+          mutate(isArchived ? 'sessions.unhide' : 'sessions.hide', { id: session.id }).catch(fail)
+        }}
+      >
+        <ArchiveIcon unarchive={isArchived} />
+      </button>
+    </div>
+  )
 
   return (
     <div>
+      <div style={ROW}>
+        <CardSlot component="SessionBox" id="session-box" size="compact" />
+      </div>
       {error && <div style={{ ...ROW, color: 'var(--bad)' }}>{error}</div>}
-      {sessions.length === 0 && (
-        <div className="empty">
-          {showHidden ? 'No hidden sessions' : 'No sessions yet. Start one from the box below.'}
-        </div>
-      )}
-      {sessions.map(session => (
-        <SessionRow
-          key={session.id}
-          session={session}
-          queued={queued[session.id]}
-          onQueue={prompt =>
-            setQueued(({ [session.id]: _, ...rest }) =>
-              prompt === undefined ? rest : { ...rest, [session.id]: prompt },
-            )
-          }
-          onError={setError}
-          onSent={prompt => markSent(session, prompt)}
-          sent={sent[session.id]}
-          grid={grid}
-          collapsed={!expanded.includes(session.id)}
-          onCollapse={() => toggleExpanded(session.id)}
-          hidden={showHidden}
-        />
-      ))}
-      <div style={{ ...ROW, borderBottom: 'none' }}>
-        <button className="ghost" onClick={() => setShowHidden(!showHidden)}>
-          {showHidden ? '← Back to sessions' : 'Show hidden'}
+      {sessions.length === 0 && <div className="empty">No sessions yet. Start one from the box above.</div>}
+      {sessions.map(session => row(session, false))}
+      <div style={{ ...ROW, borderBottom: showArchived ? undefined : 'none' }}>
+        <button className="ghost" onClick={() => setShowArchived(!showArchived)}>
+          {showArchived ? 'Hide archived' : 'Show archived'}
         </button>
       </div>
+      {showArchived && archived.length === 0 && <div className="empty">No archived sessions</div>}
+      {showArchived && archived.map(session => row(session, true))}
     </div>
   )
 }
 
-function SessionRow({
-  session,
-  queued,
-  onQueue,
-  onError,
-  onSent,
-  sent,
-  grid,
-  collapsed,
-  onCollapse,
-  hidden,
-}: {
-  session: Session
-  queued: string | undefined
-  onQueue: (prompt: string | undefined) => void
-  onError: (message: string) => void
-  onSent: (prompt: string) => void
-  sent: string | undefined
-  grid: string | undefined
-  collapsed: boolean
-  onCollapse: () => void
-  hidden: boolean
-}) {
-  const prompt = sent ?? session.last_prompt
-  const working = sent !== undefined || session.status === 'working'
-  const [expanded, setExpanded] = useState(false)
-  const [transcript, setTranscript] = useState(false)
-  const decision: Decision | null = session.decision ? JSON.parse(session.decision) : null
-  const fail = (e: Error) => onError(e.message)
-
+function ArchiveIcon({ unarchive }: { unarchive: boolean }) {
   return (
-    <div style={ROW}>
-      <div style={HEADER}>
-        <button
-          title={collapsed ? 'Expand' : 'Collapse'}
-          aria-label={collapsed ? 'Expand' : 'Collapse'}
-          aria-expanded={!collapsed}
-          onClick={onCollapse}
-          className="ghost icon"
-        >
-          {collapsed ? '▸' : '▾'}
-        </button>
-        <span
-          onClick={onCollapse}
-          style={{
-            fontWeight: 600,
-            flex: '1 1 140px',
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            cursor: 'pointer',
-          }}
-        >
-          {session.title}
-        </span>
-        <span className="badge" data-tone={TONES[session.status]}>
-          {session.status.replace('_', ' ')}
-        </span>
-        <span style={{ ...MUTED, fontSize: 12 }}>
-          {HOSTS[session.host ?? ''] ?? session.host ?? '?'} · {session.updated}
-        </span>
-        <span style={ACTIONS}>
-          <button
-            onClick={() =>
-              grid
-                ? mutate('ui.tile_add', {
-                    grid,
-                    id: `transcript-${session.id}`,
-                    component: 'Transcript',
-                    props: JSON.stringify({ session: session.id }),
-                  }).catch(fail)
-                : setTranscript(!transcript)
-            }
-          >
-            {transcript ? 'Hide' : 'Transcript'}
-          </button>
-          <button onClick={() => run('sessions.open', { session: session.id }).catch(fail)}>External</button>
-          <button
-            title={hidden ? 'Unhide' : 'Hide'}
-            aria-label={hidden ? 'Unhide' : 'Hide'}
-            onClick={() => mutate(hidden ? 'sessions.unhide' : 'sessions.hide', { id: session.id }).catch(fail)}
-            className="ghost icon"
-          >
-            {hidden ? '↺' : '×'}
-          </button>
-        </span>
-      </div>
-      {!collapsed && prompt && (
-        <div
-          style={{ ...MUTED, margin: '6px 0 4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-        >
-          You: {prompt}
-        </div>
-      )}
-      {collapsed ? null : working ? (
-        <Spinner />
-      ) : (
-        session.last_message && (
-          <div
-            style={{ ...MESSAGE, maxHeight: expanded ? undefined : MESSAGE.maxHeight }}
-            onClick={() => setExpanded(!expanded)}
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(session.last_message) }}
-          />
-        )
-      )}
-      {decision && WAITING.includes(session.status) && (
-        <DecisionPanel session={session} decision={decision} onError={onError} />
-      )}
-      {collapsed ? null : transcript ? (
-        <CardSlot component="Transcript" props={{ session: session.id }} id={`transcript-${session.id}`} />
-      ) : (
-        <Composer session={session} queued={queued} onQueue={onQueue} onError={onError} onSent={onSent} />
-      )}
-    </div>
-  )
-}
-
-function DecisionPanel({
-  session,
-  decision,
-  onError,
-}: {
-  session: Session
-  decision: Decision
-  onError: (m: string) => void
-}) {
-  const answer = (value: Record<string, unknown>) =>
-    mutate('sessions.decide', { id: session.id, at: decision.at, answer: JSON.stringify(value) }).catch((e: Error) =>
-      onError(e.message),
-    )
-  const deny = () => answer({ behavior: 'deny', message: 'Denied from Switchboard' })
-  const panel: CSSProperties = {
-    margin: '6px 0',
-    padding: 10,
-    background: 'var(--raised)',
-    borderLeft: '3px solid var(--accent)',
-    borderRadius: 8,
-  }
-
-  if (decision.tool_name === 'AskUserQuestion') {
-    const questions: Question[] = decision.tool_input.questions ?? []
-    return (
-      <Questions
-        questions={questions}
-        style={panel}
-        onAnswer={answers => answer({ behavior: 'allow', updatedInput: { questions, answers } })}
-      />
-    )
-  }
-  const input =
-    decision.tool_name === 'ExitPlanMode' ? decision.tool_input.plan : JSON.stringify(decision.tool_input, null, 2)
-  return (
-    <div style={panel}>
-      <div style={{ fontWeight: 600 }}>
-        {decision.tool_name === 'ExitPlanMode' ? 'Approve plan?' : `Allow ${decision.tool_name}?`}
-      </div>
-      <pre style={{ ...MESSAGE, whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, monospace' }}>{input}</pre>
-      <div style={{ display: 'flex', gap: 6 }}>
-        <button className="primary" onClick={() => answer({ behavior: 'allow' })}>
-          Allow
-        </button>
-        <button className="danger" onClick={deny}>
-          Deny
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function Questions({
-  questions,
-  style,
-  onAnswer,
-}: {
-  questions: Question[]
-  style: CSSProperties
-  onAnswer: (answers: Record<string, string>) => void
-}) {
-  const [picked, setPicked] = useState<Record<string, string[]>>({})
-  const toggle = (q: Question, label: string) =>
-    setPicked(p => {
-      const current = p[q.question] ?? []
-      const next = q.multiSelect
-        ? current.includes(label)
-          ? current.filter(l => l !== label)
-          : [...current, label]
-        : [label]
-      return { ...p, [q.question]: next }
-    })
-  const complete = questions.every(q => (picked[q.question] ?? []).length > 0)
-  return (
-    <div style={style}>
-      {questions.map(q => (
-        <div key={q.question} style={{ marginBottom: 6 }}>
-          <div style={{ fontWeight: 600 }}>{q.question}</div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {q.options.map(o => (
-              <button
-                key={o.label}
-                title={o.description}
-                onClick={() => toggle(q, o.label)}
-                aria-pressed={(picked[q.question] ?? []).includes(o.label)}
-              >
-                {o.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      ))}
-      <button
-        className="primary"
-        disabled={!complete}
-        onClick={() =>
-          onAnswer(Object.fromEntries(questions.map(q => [q.question, (picked[q.question] ?? []).join(', ')])))
-        }
-      >
-        Answer
-      </button>
-    </div>
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="1.5" y="2.5" width="13" height="3" rx="0.5" />
+      <path d="M2.5 5.5v7a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-7" />
+      <path d={unarchive ? 'M8 12V8M6 10l2-2 2 2' : 'M6.5 8.5h3'} />
+    </svg>
   )
 }

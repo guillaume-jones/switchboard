@@ -1,0 +1,22 @@
+#!/bin/zsh
+# sessions.start {prompt, cwd?, model?, attachments?}: starts a background Claude Code session (claude --bg) in cwd
+# (default this folder; a bare name means that folder under ~/Documents) on model (default opus). Claude names it and
+# reports its state; sessions.sync picks both up. Fails if Claude does not trust the folder yet.
+finish() {
+  local s=${2//\\/\\\\}; s=${s//\"/\\\"}; s=${s//[[:cntrl:]]/ }
+  print -r -- "{\"outcome\": \"$1\", \"summary\": \"$s\"}"
+  [[ $1 == success ]]; exit
+}
+prompt=$SWB_ARG_PROMPT
+cwd=${SWB_ARG_CWD:-$SWITCHBOARD_HOME}
+[[ $cwd != /* && -d $HOME/Documents/$cwd ]] && cwd=$HOME/Documents/$cwd
+if [[ -n $SWB_ARG_ATTACHMENTS ]]; then
+  attached=$("$SOURCE_DIR/files/attach" $SWB_ARG_ATTACHMENTS 2>&1) || finish failure "$attached"
+  prompt=${prompt:+$prompt$'\n\n'}$attached
+fi
+[[ -n $prompt ]] || finish failure "prompt is required"
+cd $cwd 2>/dev/null || finish failure "no folder $cwd"
+out=$(claude --bg --model ${SWB_ARG_MODEL:-opus} --permission-mode auto --settings $SOURCE_DIR/files/claude-hooks.json -- $prompt </dev/null 2>&1)
+short=$(print -r -- $out | sed -n 's/.*backgrounded · \([0-9a-f]\{8\}\).*/\1/p' | head -1)
+[[ -n $short ]] || finish failure "$out"
+finish success "started $short"

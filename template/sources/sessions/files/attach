@@ -1,0 +1,18 @@
+#!/bin/zsh
+# files/attach <comma-separated ids>: saves the attachments staged by sessions.attach to data/attachments/<id>/<name>, removes them
+# from the database and prints an "Attached file: <path>" line per attachment, for prompts.
+dir=$SWITCHBOARD_HOME/data/attachments
+ids=(${(s:,:)1})
+rows=$("$SWB" query sessions.attachments ids=$(jq -cn '$ARGS.positional' --args $ids)) || exit 1
+for id in $ids; do
+  [[ $id =~ '^[A-Za-z0-9-]+$' ]] || { print -u2 "bad attachment id $id"; exit 1 }
+  if [[ -z $(print -l $dir/$id/*(N)) ]]; then
+    name=$(print -r -- $rows | jq -r --arg id $id '.[] | select(.id == $id) | .name')
+    [[ -n $name ]] || { print -u2 "attachment $id was not uploaded"; exit 1 }
+    name=${${name:t}//[^A-Za-z0-9._-]/_}
+    mkdir -p $dir/$id
+    print -r -- $rows | jq -r --arg id $id '.[] | select(.id == $id) | .data' | base64 -d > $dir/$id/${name:-file} || exit 1
+    "$SWB" write sessions.detach id=$id >/dev/null || exit 1
+  fi
+  print -l -- $dir/$id/*(N) | sed 's/^/Attached file: /'
+done

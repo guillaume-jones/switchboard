@@ -3,5 +3,5 @@
   "when": { "view": "attention_blocked" },
   "key": "{id}",
   "into": "attention.raise",
-  "args": { "ref": "core:{rule}", "reason": "{blocked}; blocked firing {key}", "level": 2 }
+  "args": { "ref": "core:{rule}", "title": "", "reason": "{blocked}; blocked firing {key}", "level": 2 }
 }

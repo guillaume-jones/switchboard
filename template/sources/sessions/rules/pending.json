@@ -1,0 +1,7 @@
+{
+  "id": "sessions-pending",
+  "when": { "view": "sessions_pending" },
+  "key": "{id}@{decision_at}",
+  "into": "attention.raise",
+  "args": { "ref": "sessions:{id}", "title": "{folder}", "reason": "{reason}", "level": 2 }
+}

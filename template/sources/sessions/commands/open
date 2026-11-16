@@ -1,8 +1,11 @@
 #!/bin/zsh
-# sessions.open {session}: shows a session in the app that runs it: Zed's agent panel for Zed sessions (it cannot
-# open a given thread), otherwise the session resumed in a new terminal window (sessions.launch).
+# sessions.open {session}: shows a session in the app that runs it: background sessions attached in a new terminal
+# window, Zed's agent panel for Zed sessions (it cannot open a given thread), otherwise the session resumed in a new
+# terminal window (sessions.launch).
 row=$("$SWB" query sessions_items id=$SWB_ARG_SESSION | jq -c '.[0] // empty')
 [[ -n $row ]] || { print -r -- '{"outcome": "failure", "summary": "no such session"}'; exit 1 }
+short=$(print -r -- $row | jq -r 'select(.kind == "background") | .short_id // empty')
+[[ -n $short ]] && SWB_ARG_ATTACH=$short SWB_ARG_CWD=$(print -r -- $row | jq -r '.cwd // empty') exec "$SOURCE_DIR/commands/launch"
 case $(print -r -- $row | jq -r '.host // empty') in
   dev.zed.Zed*) open "zed://agent" && print -r -- '{"outcome": "success", "summary": "opened the Zed agent panel"}' ;;
   *) SWB_ARG_CWD=$(print -r -- $row | jq -r '.cwd // empty') SWB_ARG_PROMPT= exec "$SOURCE_DIR/commands/launch" ;;

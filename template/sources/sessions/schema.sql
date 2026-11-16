@@ -36,3 +36,23 @@ CREATE TABLE hidden (
   session TEXT PRIMARY KEY NOT NULL,
   hidden_at INTEGER NOT NULL
 );
+
+CREATE TABLE attachments (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL,
+  data TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+-- Claude Code's own view of its sessions (`claude agents --json --all`): background sessions and interactive ones still open.
+CREATE TABLE agents (
+  session TEXT PRIMARY KEY NOT NULL,
+  short_id TEXT,
+  kind TEXT NOT NULL,
+  state TEXT,
+  name TEXT,
+  cwd TEXT,
+  live INTEGER NOT NULL,
+  started_at INTEGER,
+  changed_at INTEGER NOT NULL
+);

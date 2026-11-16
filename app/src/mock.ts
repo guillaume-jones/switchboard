@@ -59,13 +59,9 @@ const db = {
   boards: [
     { id: 'main', title: 'Main', component: 'Grid', props: '{"grid":"main"}' },
     { id: 'prs', title: 'PRs', component: 'PRList', props: '{}' },
-    { id: 'workstreams', title: 'Workstreams', component: 'Workstreams', props: '{}' },
   ],
   currentBoard: 'main',
-  tiles: [
-    { grid: 'main', id: 'prs', component: 'PRList', props: '{}', x: 0, y: 0, w: 7, h: 6 },
-    { grid: 'main', id: 'workstreams', component: 'Workstreams', props: '{}', x: 7, y: 0, w: 5, h: 8 },
-  ] as Tile[],
+  tiles: [{ grid: 'main', id: 'prs', component: 'PRList', props: '{}', x: 0, y: 0, w: 7, h: 6 }] as Tile[],
   sessions: [
     { id: 'a1b2', title: 'Refactor sync worker', status: 'needs_input', run_id: null, cwd: '~/src/sync' },
   ] as Session[],
@@ -88,22 +84,17 @@ const db = {
     { id: 1, ref: 'prs:4812', reason: 'CI failed', level: 2, created: now() },
     { id: 2, ref: 'sessions:a1b2', reason: 'needs input', level: 1, created: now() },
   ],
-  streams: [{ id: 'login', title: 'Login reliability', state: 'active', last_activity: now() }],
-  members: [{ stream_id: 'login', ref: 'prs:4812', component: null, props: null, added_by: 'mock', added_at: now() }],
 }
 
 const hiddenSessions = new Set<string>()
 let errorsClearedThrough = 0
 const defaultTiles: Tile[] = [
-  { grid: 'main', id: 'sessions', component: 'Sessions', props: '{}', x: 0, y: 0, w: 8, h: 18 },
-  { grid: 'main', id: 'workstreams', component: 'Workstreams', props: '{}', x: 8, y: 0, w: 4, h: 18 },
+  { grid: 'main', id: 'sessions', component: 'Sessions', props: '{}', x: 0, y: 0, w: 12, h: 26 },
 ]
 
 const VIEWS: Record<string, () => Row[]> = {
   prs_items: () => db.prs.filter(pr => !pr.dismissed).map(({ id, title, ci }) => ({ id, title, ci })),
   sessions_items: () => db.sessions,
-  workstreams_items: () => db.streams,
-  workstreams_members: () => db.members,
   attention_open: () => db.attention,
   core_runs: () => db.runs,
   core_rules: () => db.rules,
@@ -288,7 +279,6 @@ const handlers: Handlers = {
       core: {},
       ui: {},
       attention: {},
-      workstreams: {},
     },
     cards: [...Object.keys(templateCards), ...Object.keys(INLINE_CARDS)],
     commands: COMMANDS,

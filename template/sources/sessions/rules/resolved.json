@@ -1,0 +1,7 @@
+{
+  "id": "sessions-resolved",
+  "when": { "view": "sessions_resolved" },
+  "key": "{id}",
+  "into": "attention.clear",
+  "args": { "ref": "{ref}" }
+}

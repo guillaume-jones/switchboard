@@ -21,5 +21,6 @@ CREATE TABLE tiles (
   y INTEGER NOT NULL,
   w INTEGER NOT NULL,
   h INTEGER NOT NULL,
+  list_h INTEGER, -- rows in the phone list layout; NULL sizes the tile by its content
   PRIMARY KEY (grid, id)
 );

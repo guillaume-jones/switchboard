@@ -1,0 +1,37 @@
+#!/bin/zsh
+# sessions.send {session, text, attachments?, interject?}: sends text to a Claude session as your next prompt.
+# Interactive sessions still open in a terminal or editor get it through sessions.poke. Any other session is resumed in
+# the background with it (claude --bg --resume), after stopping it if it is running, which interrupts a turn in
+# progress. With interject, the text asks it to also finish that turn's task.
+finish() {
+  local s=${2//\\/\\\\}; s=${s//\"/\\\"}; s=${s//[[:cntrl:]]/ }
+  print -r -- "{\"outcome\": \"$1\", \"summary\": \"$s\"}"
+  [[ $1 == success ]]; exit
+}
+session=$SWB_ARG_SESSION text=$SWB_ARG_TEXT
+[[ -n $SWB_ARG_INTERJECT ]] && text+=$'\n\n(Interjection; also finish your previous task.)'
+if [[ -n $SWB_ARG_ATTACHMENTS ]]; then
+  attached=$("$SOURCE_DIR/files/attach" $SWB_ARG_ATTACHMENTS 2>&1) || finish failure "$attached"
+  text=${text:+$text$'\n\n'}$attached
+fi
+[[ -n $text ]] || finish failure "text is required"
+agent() { claude agents --json --all | jq -c --arg s $session '[.[] | select(.sessionId == $s)][0] // {}' }
+kind=$(agent | jq -r '.kind // empty')
+socket=$(jq -r --arg s $session 'select(.sessionId == $s) | .messagingSocketPath // empty' ~/.claude/sessions/*.json 2>/dev/null | head -1)
+[[ $kind != background && -n $socket ]] && SWB_ARG_TEXT=$text SWB_ARG_ATTACHMENTS= exec "$SOURCE_DIR/commands/poke"
+cwd=$("$SWB" query sessions_items id=$session | jq -r '.[0].cwd // empty')
+cd ${cwd:-$HOME} 2>/dev/null || finish failure "no folder $cwd"
+flags=()
+if [[ $kind == background ]]; then
+  pid=$(agent | jq -r '.pid // empty')
+  if [[ -n $pid ]]; then
+    claude stop ${session[1,8]} >/dev/null 2>&1
+    for i in {1..50}; do kill -0 $pid 2>/dev/null || break; sleep 0.2; done
+    for i in {1..25}; do [[ -z $(agent | jq -r '.pid // empty') ]] && break; sleep 0.2; done
+  fi
+else
+  flags=(--permission-mode auto --settings $SOURCE_DIR/files/claude-hooks.json)
+fi
+out=$(claude --bg --resume $session $flags -- $text </dev/null 2>&1)
+[[ $out == *"backgrounded"* && $out != *"started a copy"* ]] || finish failure "$out"
+finish success "sent"

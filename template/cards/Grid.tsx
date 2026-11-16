@@ -1,15 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
-import { CardSlot, mutate, useCards, useQuery, type CardProps } from 'switchboard'
+import { CardSlot, mutate, useQuery, type CardProps } from 'switchboard'
 
 const COLUMNS = 12
 const ROW_HEIGHT = 32
 const GAP = 4
 const MIN_ROWS = 4
-/** Cards that only work with props a bare tile doesn't pass, so the card picker leaves them out. */
-const STRUCTURAL_CARDS = ['Root', 'Boards', 'Grid']
 
 type Geometry = { x: number; y: number; w: number; h: number }
-type Tile = Geometry & { id: string; component: string; props: string }
+type Tile = Geometry & { id: string; component: string; props: string; list_h: number | null }
 type DefaultTile = Tile & { grid: string }
 /** The tile being dragged, drawn in place of its stored geometry. `released` once the write has been sent. */
 type Drag = Geometry & { id: string; released: boolean }
@@ -18,7 +16,7 @@ const clamp = (value: number, min: number, max: number) => Math.min(Math.max(val
 const sameGeometry = (a: Geometry, b: Geometry) => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h
 
 /** Sized by its content, up to most of the screen, so cards that scroll internally still fit. */
-const LIST_TILE: CSSProperties = { height: undefined, maxHeight: '75dvh' }
+const LIST_TILE: CSSProperties = { height: undefined, maxHeight: '85dvh' }
 const TOOLBAR: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 8, padding: `2px ${GAP}px 6px` }
 /** A corner grip drawn inside the tile's bottom-right corner, with a larger hit area than it looks. */
 const RESIZE_HANDLE: CSSProperties = {
@@ -36,7 +34,7 @@ const RESIZE_HANDLE: CSSProperties = {
 
 /**
  * Tiles placed on a 12-column grid, or with `layout: "list"` stacked full width in reading order (`y`, then `x`),
- * where they can be added and removed but not moved.
+ * where they can be removed but not moved.
  */
 export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?: 'list' }>) {
   const rows = useQuery<Tile>('ui.tiles', { grid })
@@ -46,12 +44,6 @@ export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?
     [rows],
   )
   const [drag, setDrag] = useState<Drag | null>(null)
-  const [adding, setAdding] = useState('')
-  const [picking, setPicking] = useState(false)
-  const [highlighted, setHighlighted] = useState(0)
-  const query = adding.trim().toLowerCase()
-  const matches = useCards().filter(card => !STRUCTURAL_CARDS.includes(card) && card.toLowerCase().includes(query))
-  const choice = matches[Math.min(highlighted, matches.length - 1)]
   const container = useRef<HTMLDivElement>(null)
 
   // A released tile stays where it was dropped until the write comes back as new rows, instead of snapping back.
@@ -100,74 +92,17 @@ export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?
 
   const missingDefaults =
     rows !== undefined && defaults?.some(tile => !rows.some(row => row.component === tile.component))
-  const addTile = (component: string) => {
-    mutate('ui.tile_add', { grid, id: `${component}-${Date.now().toString(36)}`, component, props: '{}' })
-    setAdding('')
-    setPicking(false)
-  }
-  const toolbar = (
-    <form
-      style={TOOLBAR}
-      onSubmit={e => {
-        e.preventDefault()
-        if (choice) addTile(choice)
-      }}
-    >
-      <div style={{ position: 'relative', flex: '1 1 160px', maxWidth: 280, minWidth: 0 }}>
-        <input
-          value={adding}
-          onChange={e => {
-            setAdding(e.target.value)
-            setHighlighted(0)
-            setPicking(true)
-          }}
-          onFocus={() => setPicking(true)}
-          onBlur={() => setPicking(false)}
-          onKeyDown={e => {
-            const step = { ArrowDown: 1, ArrowUp: -1 }[e.key]
-            if (step) {
-              e.preventDefault()
-              setPicking(true)
-              setHighlighted(index => clamp(index + step, 0, matches.length - 1))
-            } else if (e.key === 'Escape') setPicking(false)
-          }}
-          placeholder="Add a card…"
-          role="combobox"
-          aria-expanded={picking}
-          style={{ width: '100%' }}
-        />
-        {picking && matches.length > 0 && (
-          <div className="menu" role="listbox">
-            {matches.map(card => (
-              <div
-                key={card}
-                role="option"
-                aria-selected={card === choice}
-                className="menu-item"
-                onPointerDown={e => e.preventDefault()}
-                onPointerEnter={() => setHighlighted(matches.indexOf(card))}
-                onClick={() => addTile(card)}
-              >
-                {card}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      <button type="submit" disabled={!query || !choice}>
-        Add card
+  const toolbar = missingDefaults && (
+    <div style={TOOLBAR}>
+      <button
+        type="button"
+        className="primary"
+        title="Replace this board's tiles with the template's default cards"
+        onClick={() => mutate('ui.reset', { grid })}
+      >
+        Restore default cards
       </button>
-      {missingDefaults && (
-        <button
-          type="button"
-          className="primary"
-          title="Replace this board's tiles with the template's default cards"
-          onClick={() => mutate('ui.reset', { grid })}
-        >
-          Restore default cards
-        </button>
-      )}
-    </form>
+    </div>
   )
   const removeButton = (id: string) => (
     <button
@@ -187,7 +122,11 @@ export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?
         {toolbar}
         {tiles.length === 0 && <div className="empty">No cards on this board</div>}
         {tiles.map(tile => (
-          <div key={tile.id} className="tile" style={LIST_TILE}>
+          <div
+            key={tile.id}
+            className="tile"
+            style={tile.list_h ? { ...LIST_TILE, height: tile.list_h * ROW_HEIGHT } : LIST_TILE}
+          >
             <div className="tile-bar">
               <span className="heading">{tile.component}</span>
               {removeButton(tile.id)}

@@ -1,12 +1,14 @@
 #!/usr/bin/env -S python3 -I
-"""sessions.serve {session?, prompt?, cwd, model?, disallowed?}: holds a Claude Code session open for Switchboard, as
+"""sessions.serve {session?, prompt?, cwd, model?, disallowed?, permission_mode?}: holds a Claude Code session open for Switchboard, as
 `claude -p` reading stream-json, so each `swb run input $RUN_ID <line>` reaches it at once. Lines are JSON:
 {"text": "..."} sends a message, folded into the turn in progress if Claude is working; {"interrupt": true} stops
 the turn. Resumes session, or starts a new one with prompt, and prints {"session": "<id>"} once Claude reports it.
 Exits once Claude has been idle for IDLE seconds; messages arriving meanwhile are sent to a resumed process.
 Reports the session to sessions.claude_hook as its hooks would, which stop for held sessions (files/hook): only the
-events that change its status, in order, from Claude's output, where a message shows up once Claude takes it."""
-import json, os, queue, select, subprocess, sys, threading, time, uuid
+events that change its status, in order, from Claude's output, where a message shows up once Claude takes it.
+Claude asks it for permissions (--permission-prompt-tool stdio), which it records as a pending decision and answers
+once sessions.answer writes the answer given with sessions.decide into the FIFO data/decisions/<session>."""
+import atexit, json, os, queue, select, signal, subprocess, sys, threading, time, uuid
 
 IDLE = 900
 ASKS = ("AskUserQuestion", "ExitPlanMode")
@@ -100,11 +102,15 @@ def observe(event):
         report("StopFailure" if failed else "Stop", last_assistant_message=event.get("result") or None)
 
 
-tool_at, asking = time.monotonic(), False
+tool_at, asking, decisions = time.monotonic(), False, None
+decisions_path = lambda: os.path.join(os.environ["SWITCHBOARD_HOME"], "data", "decisions", session)
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+atexit.register(lambda: decisions and os.path.exists(decisions_path()) and os.remove(decisions_path()))
 
 while True:
-    command = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--replay-user-messages",
-               "--permission-mode", "auto", "--settings", HOOKS]
+    command = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+               "--replay-user-messages", "--permission-mode", args.get("permission_mode") or "auto", "--permission-prompt-tool", "stdio",
+               "--settings", HOOKS]
     command += ["--resume", session] if session else []
     command += ["--model", args["model"]] if args.get("model") else []
     command += ["--disallowedTools", *args["disallowed"].split()] if args.get("disallowed") else []
@@ -119,6 +125,35 @@ while True:
     out = Lines(claude.stdout.fileno())
     send = lambda message: (claude.stdin.write((json.dumps(message) + "\n").encode()), claude.stdin.flush())
     busy, idle_since, closing, pending = False, time.monotonic(), False, []
+    asks = {}  # request id → can_use_tool request, oldest first; the newest is the one shown
+
+    def ask(request_id, request):
+        global decisions
+        if decisions is None:
+            path = decisions_path()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            if os.path.exists(path):
+                os.remove(path)
+            os.mkfifo(path)
+            decisions = Lines(os.open(path, os.O_RDWR))
+        asks[request_id] = request
+        report("PermissionRequest", tool_name=request.get("tool_name"), tool_input=request.get("input"))
+
+    def answer(line):
+        try:
+            decision = json.loads(line)["hookSpecificOutput"]["decision"]
+        except (ValueError, KeyError, TypeError):
+            return
+        if not asks:
+            return
+        request_id, request = asks.popitem()
+        if decision.get("behavior") == "allow":
+            reply = {"behavior": "allow", "updatedInput": decision.get("updatedInput") or request.get("input") or {}}
+        else:
+            reply = {"behavior": "deny", "message": decision.get("message") or "Denied from Switchboard"}
+        send({"type": "control_response", "response": {"subtype": "success", "request_id": request_id, "response": reply}})
+        if asks:
+            ask(*asks.popitem())
 
     def handle(message):
         global busy
@@ -134,7 +169,7 @@ while True:
         handle(message)
     while not out.eof:
         wait = None if busy or closing else max(0.0, idle_since + IDLE - time.monotonic())
-        readable, _, _ = select.select([0, out.fd], [], [], wait)
+        readable, _, _ = select.select([0, out.fd] + ([decisions.fd] if decisions else []), [], [], wait)
         if not readable:
             claude.stdin.close()
             closing = True
@@ -145,17 +180,28 @@ while True:
                     handle(message)
                 except BrokenPipeError:
                     pending.append(message)
+        if decisions and decisions.fd in readable:
+            for line in decisions.read():
+                answer(line)
         if out.fd in readable:
             for line in out.read():
                 try:
                     event = json.loads(line)
                 except ValueError:
                     continue
+                if event.get("type") == "control_request" and (event.get("request") or {}).get("subtype") == "can_use_tool":
+                    ask(event["request_id"], event["request"])
+                elif event.get("type") == "control_cancel_request":
+                    asks.pop(event.get("request_id"), None)
                 observe(event)
                 if event.get("type") == "result":
                     busy, idle_since = False, time.monotonic()
     code = claude.wait()
     reports.join()
+    if decisions:
+        os.close(decisions.fd)
+        os.remove(decisions_path())
+        decisions = None
     if pending and session:
         queued = pending
         continue

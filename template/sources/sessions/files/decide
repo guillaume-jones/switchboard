@@ -3,6 +3,8 @@
 # sessions.answer writes into the FIFO data/decisions/<session>. Exits without a decision, leaving it to the session's
 # own prompt, once the request is answered elsewhere or superseded, Claude Code's process is gone, or Switchboard
 # cannot be reached. Checks those every 5s; the answer itself arrives at once.
+# A session Switchboard holds asks sessions.serve instead (--permission-prompt-tool stdio), so its hook stays out of it.
+[[ -n $SWB_HELD_PID && $SWB_HELD_PID == $CLAUDE_PID ]] && exit 0
 path+=(/usr/local/bin /Applications/Switchboard.app/Contents/MacOS)
 swb=${SWB:-swb}
 payload=$(cat)

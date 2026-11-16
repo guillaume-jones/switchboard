@@ -42,17 +42,27 @@ function setStatus(next: Partial<Status>) {
   for (const listener of statusListeners) listener()
 }
 
-let offlineTimer = 0
+let streamTimer = 0
+let lastContact = 0
 
-/** A dropped or new stream only counts as offline if the desktop has not answered within HELLO_WAIT_MS. */
+/**
+ * Until the stream says hello, it is opened again every HELLO_WAIT_MS: a connection made while the network was not up
+ * yet (as while a phone's VPN reconnects) can hang long after a new one would succeed. The app counts as offline once
+ * the desktop has not answered anything for that long.
+ */
 function reconnecting() {
-  offlineTimer ||= window.setTimeout(() => setStatus({ online: false }), HELLO_WAIT_MS)
+  streamTimer ||= window.setTimeout(() => {
+    streamTimer = 0
+    if (client) return
+    if (Date.now() - lastContact >= HELLO_WAIT_MS) setStatus({ online: false })
+    current?.close()
+    if (document.visibilityState === 'visible') open()
+  }, HELLO_WAIT_MS)
 }
 
 function contact() {
-  clearTimeout(offlineTimer)
-  offlineTimer = 0
   const now = Date.now()
+  lastContact = now
   localStorage.setItem(AS_OF_KEY, String(now))
   if (!status.online || now - (status.asOf ?? 0) > 1000) setStatus({ online: true, asOf: now })
 }
@@ -103,13 +113,16 @@ let current: EventSource | undefined
 /** Something was answered from the cache, or the desktop dropped this client's subscriptions with its last stream. */
 let stale = false
 
-async function post(command: string, args: unknown) {
+/** Reads that can be answered from the cache give up after `timeout` ms, so a hanging network does not block them. */
+async function post(command: string, args: unknown, timeout?: number) {
+  if (timeout && !status.online) throw new Offline('offline')
   let response: Response
   try {
     response = await fetch(`/api/${command}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', [CLIENT_HEADER]: client },
       body: JSON.stringify(args),
+      signal: timeout ? AbortSignal.timeout(timeout) : undefined,
     })
   } catch {
     throw new Offline('the desktop is unreachable')
@@ -240,6 +253,7 @@ function open() {
     if (source.readyState === EventSource.CLOSED) setTimeout(reopen, RETRY_MS)
   }
   current = source
+  reconnecting()
 }
 
 function reopen() {
@@ -253,7 +267,7 @@ const ready = () => Promise.race([connected, new Promise(resolve => setTimeout(r
 const handlers: { [C in keyof Commands]: (args: Commands[C]['args']) => Promise<Commands[C]['result']> } = {
   config: async () => {
     try {
-      const config = await post('config', {})
+      const config = await post('config', {}, HELLO_WAIT_MS)
       keep('config', config)
       return config
     } catch (error) {
@@ -265,7 +279,7 @@ const handlers: { [C in keyof Commands]: (args: Commands[C]['args']) => Promise<
   },
   card: async ({ name }) => {
     try {
-      const modules = await post('card', { name })
+      const modules = await post('card', { name }, HELLO_WAIT_MS)
       keep(`card:${name}`, modules)
       return modules
     } catch (error) {
@@ -277,10 +291,10 @@ const handlers: { [C in keyof Commands]: (args: Commands[C]['args']) => Promise<
   },
   subscribe: async ({ name, params }) => {
     const key = `rows:${name}${JSON.stringify(params)}`
-    await ready()
+    if (status.online) await ready()
     try {
       if (!client) throw new Offline('not connected')
-      const reply = await post('subscribe', { name, params })
+      const reply = await post('subscribe', { name, params }, HELLO_WAIT_MS)
       rowKeys.set(reply.id, key)
       keep(key, reply.rows)
       return reply
@@ -317,7 +331,6 @@ const handlers: { [C in keyof Commands]: (args: Commands[C]['args']) => Promise<
 
 export function connect(): Backend {
   open()
-  reconnecting()
   loadOutbox()
   navigator.serviceWorker?.register('/sw.js')
   navigator.storage?.persist?.()

@@ -285,7 +285,8 @@ const QUEUE_BUTTON: CSSProperties = { minHeight: 0, padding: '0 8px', fontSize: 
 
 /**
  * The follow-up queued for a session, shown as a faded user message, or with its error if sending it failed. Cancel (Esc
- * in the message box) moves it back into the message box; Interrupt (⌘↩ with an empty message box) sends it now, and
+ * in the message box) moves it back into the message box; Send now (⌘↩ with an empty message box) sends it while Claude
+ * works, folded into its turn, and
  * Retry sends a failed one again.
  */
 export function QueuedMessage({ session, onError }: { session: Session; onError: (message: string) => void }) {
@@ -321,7 +322,7 @@ export function QueuedMessage({ session, onError }: { session: Session; onError:
                   mutate('sessions.queue_send', { session: session.id, interject: failed ? 0 : 1 }).catch(fail)
                 }
               >
-                {failed ? 'Retry' : 'Interrupt'}
+                {failed ? 'Retry' : 'Send now'}
               </button>
             </span>
           }

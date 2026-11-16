@@ -162,7 +162,7 @@ function SessionTranscript({ id, limit }: { id: string; limit: number }) {
             ) : (
               <a
                 href="#"
-                title={`Open in ${hostName(session)}`}
+                title={session.kind === 'background' ? 'Open in a terminal' : `Open in ${hostName(session)}`}
                 onClick={e => {
                   e.preventDefault()
                   run('sessions.open', { session: id }).catch(fail)

@@ -259,6 +259,10 @@ function unqueue(entry: Outbox) {
 
 export const busy = (session: Session) => session.status === 'working'
 
+/** A message Claude has been sent but not taken yet, which an interrupt (`sessions.stop`) hands to it at once. */
+export const interruptible = (session: Session, entry: Outbox) =>
+  session.kind === 'background' && entry.state === 'sending' && !!entry.sent_at && !entry.acked
+
 /**
  * The `text`-style param and `attachments` for a command taking files: each file's placeholder becomes
  * `{{attachment:<id>}}`, which the command replaces with its saved path. Files whose placeholder was deleted are dropped.
@@ -281,7 +285,7 @@ export function withAttachments<K extends string>(param: K, prompt: string, file
   }
 }
 
-const QUEUE_BUTTON: CSSProperties = { minHeight: 0, padding: '0 8px', fontSize: 12 }
+export const QUEUE_BUTTON: CSSProperties = { minHeight: 0, padding: '0 8px', fontSize: 12 }
 
 /**
  * The follow-up queued for a session, shown as a faded user message, or with its error if sending it failed. Cancel (Esc
@@ -449,9 +453,11 @@ export function MessageBox({
 }
 
 /**
- * Message box for a session. Send (⌘↩) adds a follow-up to `sessions.queue`, which the desktop sends once Claude is neither
- * working nor asking for a permission; the card must show the queue with `QueuedMessage`. `onQueued` is called for each
- * message. Sending an empty box sends the queue now; Esc moves it back into the box.
+ * Message box for a session. Send (⌘↩) adds a follow-up to `sessions.queue`, which the desktop sends at once to a session
+ * it holds, where Claude takes it at its next pause, and otherwise once Claude is neither working nor asking for a
+ * permission; the card must show the queue with `QueuedMessage`. `onQueued` is called for each message. Sending an empty
+ * box sends the queue now, or interrupts Claude's turn so that it takes the message waiting for it; Esc moves a queued
+ * message back into the box.
  */
 export function Composer({
   session,
@@ -462,11 +468,13 @@ export function Composer({
   onError: (message: string) => void
   onQueued?: () => void
 }) {
-  const queued = useOutbox(session.id).find(e => e.state !== 'sending')
+  const entries = useOutbox(session.id)
+  const queued = entries.find(e => e.state !== 'sending')
   const fail = (e: Error) => onError(e.message)
   const send = (prompt: string, files: Attachment[]) => {
     if (!prompt) {
       if (queued) mutate('sessions.queue_send', { session: session.id, interject: 1 }).catch(fail)
+      else if (entries.some(e => interruptible(session, e))) run('sessions.stop', { session: session.id }).catch(fail)
       return
     }
     const { text, attachments = '' } = withAttachments('text', prompt, files)

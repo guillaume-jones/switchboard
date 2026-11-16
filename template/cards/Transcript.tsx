@@ -7,7 +7,9 @@ import {
   Composer,
   DecisionPanel,
   hostName,
+  interruptible,
   outboxText,
+  QUEUE_BUTTON,
   QueuedMessage,
   TONES,
   useOutbox,
@@ -83,7 +85,7 @@ function SessionTranscript({ id, limit }: { id: string; limit: number }) {
   const entries = useOutbox(id)
   const sending = entries
     .filter(e => e.state === 'sending')
-    .map(e => ({ text: outboxText(e), sent: e.acked || e.sent_at }))
+    .map(e => ({ text: outboxText(e), sent: e.acked || e.sent_at, entry: e }))
     .filter(
       ({ text }) =>
         !messages.some(m => m.role === 'user' && withoutAttachments(m.text).startsWith(withoutAttachments(text))),
@@ -292,10 +294,30 @@ function SessionTranscript({ id, limit }: { id: string; limit: number }) {
               </div>
             )
           })}
-          {sending.map(({ text, sent }) => (
+          {sending.map(({ text, sent, entry }) => (
             <div key={text} className={grows.current.get(text) ? 'grow' : undefined}>
               <div>
-                <Bubble role="user" label={sent ? 'Sent' : 'Sending'} text={text} faded />
+                {interruptible(session, entry) ? (
+                  <Bubble
+                    role="user"
+                    label="Waiting for Claude to pause"
+                    text={text}
+                    faded
+                    action={
+                      <button
+                        type="button"
+                        className="ghost"
+                        style={QUEUE_BUTTON}
+                        title="Stop Claude's turn so it reads this now (⌘↩ with an empty message box)"
+                        onClick={() => run('sessions.stop', { session: id }).catch(fail)}
+                      >
+                        Interrupt
+                      </button>
+                    }
+                  />
+                ) : (
+                  <Bubble role="user" label={sent ? 'Sent' : 'Sending'} text={text} faded />
+                )}
               </div>
             </div>
           ))}

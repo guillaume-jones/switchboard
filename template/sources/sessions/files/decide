@@ -6,7 +6,7 @@
 path+=(/usr/local/bin /Applications/Switchboard.app/Contents/MacOS)
 swb=${SWB:-swb}
 payload=$(cat)
-print -r -- $payload | /bin/dash "${0:h}/hook" || exit 0
+print -r -- $payload | SWB_HOOK_ALWAYS=1 /bin/dash "${0:h}/hook" || exit 0
 session=$(print -r -- $payload | jq -r .session_id)
 mine=$("$swb" query sessions_items id=$session | jq -r '.[0].decision | fromjson? | .at // empty') || exit 0
 [[ -n $mine ]] || exit 0

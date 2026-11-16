@@ -3,10 +3,14 @@
 `claude -p` reading stream-json, so each `swb run input $RUN_ID <line>` reaches it at once. Lines are JSON:
 {"text": "..."} sends a message, folded into the turn in progress if Claude is working; {"interrupt": true} stops
 the turn. Resumes session, or starts a new one with prompt, and prints {"session": "<id>"} once Claude reports it.
-Exits once Claude has been idle for IDLE seconds; messages arriving meanwhile are sent to a resumed process."""
-import json, os, select, subprocess, sys, time, uuid
+Exits once Claude has been idle for IDLE seconds; messages arriving meanwhile are sent to a resumed process.
+Reports the session to sessions.claude_hook as its hooks would, which stop for held sessions (files/hook): only the
+events that change its status, in order, from Claude's output, where a message shows up once Claude takes it."""
+import json, os, queue, select, subprocess, sys, threading, time, uuid
 
 IDLE = 900
+ASKS = ("AskUserQuestion", "ExitPlanMode")
+SLOW_TOOL = 2.0
 HOOKS = os.path.join(os.environ["SOURCE_DIR"], "files", "claude-hooks.json")
 
 
@@ -52,8 +56,54 @@ finish = lambda outcome, summary: (print(json.dumps({"outcome": outcome, "summar
 if not session and not queued:
     finish("failure", "session or prompt is required")
 
+reports = queue.Queue()
+
+
+def report_all():
+    while True:
+        payload = reports.get()
+        subprocess.run([os.environ["SWB"], "write", "sessions.claude_hook", "host=switchboard", "entrypoint=sdk-cli"],
+                       input=json.dumps(payload), text=True, capture_output=True)
+        reports.task_done()
+
+
+threading.Thread(target=report_all, daemon=True).start()
+report = lambda event, **fields: reports.put({"session_id": session, "cwd": cwd, "hook_event_name": event, **fields})
+
+
+def observe(event):
+    """Turns one line of Claude's output into the hook event it stands for, if any."""
+    global session, tool_at, asking
+    kind, content = event.get("type"), (event.get("message") or {}).get("content")
+    blocks = content if isinstance(content, list) else []
+    if kind == "system" and event.get("subtype") == "init" and event.get("session_id") != session:
+        session = event["session_id"]
+        print(json.dumps({"session": session}), flush=True)
+        report("SessionStart", source="startup")
+    elif kind == "user" and event.get("isReplay"):
+        text = content if isinstance(content, str) else "\n\n".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+        report("UserPromptSubmit", prompt=text)
+    elif kind == "assistant":
+        for block in blocks:
+            if block.get("type") == "tool_use":
+                tool_at = time.monotonic()
+                if block.get("name") in ASKS:
+                    asking = True
+                    report("PreToolUse", tool_name=block["name"])
+    elif kind == "user" and any(b.get("type") == "tool_result" for b in blocks):
+        # A slow result may follow a permission prompt (needs_permission, from files/decide); a quick one changes nothing.
+        if asking or time.monotonic() - tool_at > SLOW_TOOL:
+            report("PostToolUse")
+        asking = False
+    elif kind == "result":
+        failed = event.get("subtype") not in ("success", "error_during_execution")
+        report("StopFailure" if failed else "Stop", last_assistant_message=event.get("result") or None)
+
+
+tool_at, asking = time.monotonic(), False
+
 while True:
-    command = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+    command = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--replay-user-messages",
                "--permission-mode", "auto", "--settings", HOOKS]
     command += ["--resume", session] if session else []
     command += ["--model", args["model"]] if args.get("model") else []
@@ -98,12 +148,11 @@ while True:
                     event = json.loads(line)
                 except ValueError:
                     continue
-                if event.get("type") == "system" and event.get("subtype") == "init" and event.get("session_id") != session:
-                    session = event["session_id"]
-                    print(json.dumps({"session": session}), flush=True)
-                elif event.get("type") == "result":
+                observe(event)
+                if event.get("type") == "result":
                     busy, idle_since = False, time.monotonic()
     code = claude.wait()
+    reports.join()
     if pending and session:
         queued = pending
         continue

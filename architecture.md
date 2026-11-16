@@ -188,6 +188,7 @@ Talks to the app over `data/swb.sock`.
 
 - `swb write <source.writer> [name=value ...] [< payload]`: spooled to `data/spool/` if the app is closed; at-least-once.
 - `swb query <view | source.query> [name=value ...]`
+- `swb run start <source.command> [name=value ...]`: prints the run id; started from a command, the run is its child.
 - `swb run finish <run_id> --ok|--fail [summary]`
 - `swb run input <run_id> [text]`: one line, or stdin, to a long-running run.
 - `swb run stop <run_id>`

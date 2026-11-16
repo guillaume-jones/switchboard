@@ -263,7 +263,7 @@ impl Shared {
         result.recv().map_err(|_| anyhow!("engine stopped"))?
     }
 
-    fn run(&self, name: &str, args: Value, origin: Origin, id: Option<String>) -> Result<String> {
+    pub(crate) fn run(&self, name: &str, args: Value, origin: Origin, id: Option<String>) -> Result<String> {
         if !self.loaded().commands.contains_key(name) && !BUILTINS.contains(&name) {
             bail!("no command named {name}");
         }

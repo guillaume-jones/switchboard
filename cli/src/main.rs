@@ -16,6 +16,8 @@ const USAGE: &str = "usage:
       Call a writer. If the app is closed, the write is queued and applied on its next start.
   swb query <view | source.query> [name=value ...]
       Print the rows as a JSON array.
+  swb run start <source.command> [name=value ...]
+      Start a command by hand and print its run id. From a command, the new run is its child.
   swb run finish <run_id> --ok|--fail [summary]
       Finish an open run.
   swb run input <run_id> [text]
@@ -99,6 +101,10 @@ fn main() -> ExitCode {
             let summary = (!summary.is_empty()).then(|| summary.join(" "));
             json!({ "op": "finish", "run_id": id, "ok": *flag == "--ok", "summary": summary })
         }
+        ["run", "start", name, rest @ ..] => match params(rest) {
+            Ok(p) => json!({ "op": "run", "name": name, "params": p, "run_id": env::var("RUN_ID").ok() }),
+            Err(e) => return fail(e, 2),
+        },
         ["run", "input", id, text @ ..] => {
             let text = (!text.is_empty()).then(|| text.join(" "));
             json!({ "op": "input", "run_id": id, "text": text })
@@ -171,8 +177,10 @@ fn main() -> ExitCode {
     if let Some(e) = response["error"].as_str() {
         return fail(e, 1);
     }
-    if request["op"] == "query" {
-        println!("{}", response["ok"]);
+    match request["op"].as_str() {
+        Some("query") => println!("{}", response["ok"]),
+        Some("run") => println!("{}", response["ok"].as_str().unwrap_or_default()),
+        _ => {}
     }
     ExitCode::SUCCESS
 }

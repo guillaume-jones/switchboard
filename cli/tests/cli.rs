@@ -140,6 +140,47 @@ fn lineage_through_swb_write_limits_depth() {
 }
 
 #[test]
+fn run_start_input_and_stop_reach_a_long_running_command() {
+    let h = home(&[
+        ("sources/prs/source.json", r#"{"long_running": ["serve"]}"#),
+        (
+            "sources/prs/commands/serve",
+            "#!/bin/sh\nread -r args\nwhile read -r title; do \"$SWB\" write prs.add id=1 title=\"$title\"; done\n",
+        ),
+        (
+            "sources/prs/commands/launch",
+            "#!/bin/sh\n\"$SWB\" run start prs.serve name=x > \"$SWITCHBOARD_HOME/serve.id\"\n",
+        ),
+    ]);
+    let engine = Engine::open(h.path(), Quiet).unwrap();
+    let launch = engine.run("prs.launch", json!({}), switchboard_core::Origin::default()).unwrap();
+    let id_file = h.path().join("serve.id");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fs::read_to_string(&id_file).is_ok_and(|id| id.ends_with('\n')) {
+        assert!(Instant::now() < deadline, "swb run start printed no run id");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let serve = fs::read_to_string(&id_file).unwrap().trim().to_string();
+    let run = engine.query("core_runs", json!({"id": serve})).unwrap();
+    assert_eq!((run[0]["command"].as_str(), run[0]["parent"].as_str()), (Some("prs.serve"), Some(launch.as_str())));
+    let input = swb(h.path(), &["run", "input", &serve, "from", "args"], None);
+    assert!(input.status.success(), "{}", String::from_utf8_lossy(&input.stderr));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while rows(h.path(), "prs_items") != json!([{"id": 1, "title": "from args"}]) {
+        assert!(Instant::now() < deadline, "the input line never arrived");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(swb(h.path(), &["run", "stop", &serve], None).status.success());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while engine.query("core_runs", json!({"id": serve, "state": "stopped"})).unwrap().as_array().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the run was not stopped");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let late = swb(h.path(), &["run", "input", &serve], Some("late"));
+    assert!(String::from_utf8_lossy(&late.stderr).contains("not running"), "{}", String::from_utf8_lossy(&late.stderr));
+}
+
+#[test]
 fn write_never_reads_stdin_unless_the_writer_takes_a_payload() {
     let h = home(&[]);
     let engine = Engine::open(h.path(), Quiet).unwrap();

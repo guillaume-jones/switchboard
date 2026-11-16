@@ -48,7 +48,7 @@ fn serve_connection(shared: &Shared, stream: UnixStream) {
     }
 }
 
-/// `{"op": "write" | "query" | "finish" | "input" | "stop", ...}`, as sent by `swb`.
+/// `{"op": "write" | "query" | "run" | "finish" | "input" | "stop", ...}`, as sent by `swb`.
 fn handle_request(shared: &Shared, request: &Value, trigger: &str) -> Result<Value> {
     let name = request["name"].as_str().unwrap_or_default();
     let mut params = request.get("params").cloned().unwrap_or(json!({}));
@@ -73,6 +73,10 @@ fn handle_request(shared: &Shared, request: &Value, trigger: &str) -> Result<Val
             let ok = request["ok"].as_bool().unwrap_or(false);
             shared.finish_run(run_id, ok, request["summary"].as_str()).map(|()| Value::Null)
         }
+        Some("run") => {
+            let origin = Origin { trigger: trigger.into(), run_id: request["run_id"].as_str().map(String::from) };
+            shared.run(name, params, origin, None).map(Value::String)
+        }
         Some("input") => {
             let run_id = request["run_id"].as_str().ok_or_else(|| anyhow!("input needs run_id"))?;
             let text =
@@ -83,6 +87,6 @@ fn handle_request(shared: &Shared, request: &Value, trigger: &str) -> Result<Val
             let run_id = request["run_id"].as_str().ok_or_else(|| anyhow!("stop needs run_id"))?;
             shared.stop_run(run_id).map(|()| Value::Null)
         }
-        op => bail!("unknown op {op:?} (expected write, query, finish, input, stop)"),
+        op => bail!("unknown op {op:?} (expected write, query, run, finish, input, stop)"),
     }
 }

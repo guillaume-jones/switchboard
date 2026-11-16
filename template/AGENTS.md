@@ -162,6 +162,7 @@ Exactly one of `command` (source, built-in, or shell: `palette.open`, `card.focu
 swb check
 swb write <source.writer> [name=value ...] [< payload]   values parsing as JSON are JSON; spooled if the app is closed
 swb query <view | source.query> [name=value ...]
+swb run start <source.command> [name=value ...]          starts a command by hand, prints its run id
 swb run finish <run_id> --ok|--fail [summary]
 swb run input <run_id> [text]                             one line, or stdin, to a long-running run
 swb run stop <run_id>

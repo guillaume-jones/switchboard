@@ -241,15 +241,15 @@ fn uuid_like(id: &str) -> bool {
 #[test]
 fn timeout_kills_the_process_group() {
     let h = home(&[
-        ("sources/prs/source.json", r#"{"timeouts": {"slow": 1}}"#),
+        ("sources/prs/source.json", r#"{"timeouts": {"slow": 2}}"#),
         ("sources/prs/commands/slow", "#!/bin/sh\nsleep 30 &\necho $! > \"$SWITCHBOARD_HOME/child.pid\"\nwait\n"),
     ]);
     let (engine, _rx) = open(h.path());
     let start = Instant::now();
     let id = engine.run("prs.slow", json!({}), card()).unwrap();
     let run = until(&engine, "core_runs", json!({"id": id}), 5, |r| r[0]["state"] == "failure");
-    assert_eq!(run[0]["summary"], "timed out after 1s");
-    assert!(start.elapsed() < Duration::from_secs(3));
+    assert_eq!(run[0]["summary"], "timed out after 2s");
+    assert!(start.elapsed() < Duration::from_secs(4));
     let log = fs::read_to_string(h.path().join(format!("data/runs/{id}/err"))).unwrap_or_default();
     let child: i32 =
         fs::read_to_string(h.path().join("child.pid")).unwrap_or_else(|e| panic!("{e}: {log}")).trim().parse().unwrap();

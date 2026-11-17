@@ -23,7 +23,7 @@ export const THEME = `
 :root {
   color-scheme: dark;
   --bg: #16181c; --panel: #1f2228; --raised: #2c3038; --fg: #f4f2ec; --muted: #9b988f; --border: #343840;
-  --accent: #3b82f6; --on-accent: #fff; --info: #5aa9e6; --claude: #d97757; --warn: #f5b841; --bad: #e0533d; --good: #6cc08b;
+  --accent: #3b82f6; --on-accent: #fff; --info: #5aa9e6; --claude: #d97757; --warn: #f5b841; --bad: #e5484d; --good: #6cc08b;
   --shadow: 0 1px 2px #0006, 0 4px 16px #0003;
   --radius: 10px;
   font: 13px/1.45 system-ui, -apple-system, sans-serif;
@@ -84,6 +84,13 @@ button[aria-pressed=true], button[aria-current=page] {
   display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px;
   background: var(--panel); border-radius: 999px; box-shadow: var(--shadow);
 }
+.connection { position: fixed; inset: var(--top-edge, 0px) 0 auto; height: 1px; overflow: hidden; z-index: 6; background: var(--bad); }
+.connection.reconnecting { background: color-mix(in srgb, var(--warn) 25%, transparent); }
+.connection.reconnecting::after {
+  content: ''; position: absolute; inset: 0 auto 0 0; width: 40%; background: var(--warn);
+  animation: connection-slide 1.2s ease-in-out infinite;
+}
+@keyframes connection-slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 .health-anchor { position: fixed; right: 10px; z-index: 5; padding: 2px; top: calc(var(--top-edge, 0px) + 2px); }
 :root[data-mobile] .health-anchor { top: calc(var(--top-edge, 0px) + 3px); }
 .health { min-width: 22px; min-height: 22px; padding: 0 6px; border-radius: 999px; }

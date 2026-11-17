@@ -34,6 +34,10 @@ pub struct Settings {
     pub remote: Option<u16>,
     /// How long another device may hold a run it queued while offline before it is dropped instead of sent.
     pub queue_run_expiry: Duration,
+    /// How long another device shows as reconnecting after losing the desktop before it shows as offline.
+    pub reconnect_timeout: Duration,
+    /// How long another device waits for the desktop before answering from its cache and opening the stream again.
+    pub connect_timeout: Duration,
     /// When `core.notify` is also pushed to other devices: `off`, `locked`, `idle` or `always`.
     pub push: String,
     /// How long without keyboard or pointer input, and without an app keeping the display awake, before `idle`.
@@ -91,7 +95,12 @@ impl Settings {
             seconds("snapshot_retention", 172_800),
             seconds("retention", 2_592_000),
         );
-        let (queue_run_expiry, idle_after) = (seconds("queue_run_expiry", 3_600), seconds("idle_after", 120));
+        let (queue_run_expiry, reconnect_timeout, connect_timeout, idle_after) = (
+            seconds("queue_run_expiry", 3_600),
+            seconds("reconnect_timeout", 10),
+            seconds("connect_timeout", 3),
+            seconds("idle_after", 120),
+        );
         let remote = fields.get("remote").and_then(|v| {
             let port = positive_integer(v).and_then(|n| u16::try_from(n).ok());
             if port.is_none() {
@@ -125,6 +134,8 @@ impl Settings {
             editing: text("editing", ""),
             remote,
             queue_run_expiry,
+            reconnect_timeout,
+            connect_timeout,
             push: text("push", "idle"),
             idle_after,
         };

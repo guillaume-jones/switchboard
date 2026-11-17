@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, type CSSProperties } from 'react'
-import { CardSlot, run } from 'switchboard'
+import { CardSlot, run, useConnection } from 'switchboard'
 import { THEME, useMobile } from './lib/theme'
 
 /** Opaque, so iOS extends its colour into the status bar instead of blurring the content below it. */
@@ -26,11 +26,13 @@ export default function Root() {
     document.addEventListener('click', open, true)
     return () => document.removeEventListener('click', open, true)
   }, [mobile])
+  const connection = useConnection().state
   const boards = useMemo(() => ({ client: mobile ? 'mobile' : 'desktop' }), [mobile])
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh' }}>
       <style>{THEME}</style>
       <div style={TOP_EDGE} />
+      {connection !== 'online' && <div className={`connection ${connection}`} />}
       <div className="chip health-anchor">
         <CardSlot component="Health" id="health" />
       </div>

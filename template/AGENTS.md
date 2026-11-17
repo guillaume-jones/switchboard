@@ -102,6 +102,8 @@ Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started i
 | `depth_cap` | `20` | card nesting |
 | `remote` | none | HTTPS port that `tailscale serve` exposes the board on to your other devices; none keeps it local |
 | `queue_run_expiry` | `3600` | how long a run queued offline on another device may wait before it is dropped; writes never expire |
+| `reconnect_timeout` | `10` | how long another device shows as reconnecting after losing the desktop, before it shows as offline |
+| `connect_timeout` | `3` | how long another device waits for the desktop before answering from its cache and opening the stream again |
 | `push` | `"idle"` | when `core.notify` is also pushed to other devices' installed apps: `"off"`, `"locked"` (screen locked), `"idle"` (locked or idle) or `"always"` |
 | `idle_after` | `120` | no input for this long, with nothing keeping the display awake, is `idle` |
 

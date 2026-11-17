@@ -272,6 +272,8 @@ const handlers: Handlers = {
     root: 'Root',
     depth_cap: 20,
     queue_run_expiry: 3600,
+    reconnect_timeout: 10,
+    connect_timeout: 3,
     queue_expiry: {},
     sources: {
       prs: { item_card: 'PRItem' },

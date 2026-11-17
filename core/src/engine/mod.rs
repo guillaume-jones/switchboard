@@ -558,6 +558,8 @@ impl Engine {
             "root": loaded.settings.root,
             "depth_cap": loaded.settings.depth_cap,
             "queue_run_expiry": loaded.settings.queue_run_expiry.as_secs(),
+            "reconnect_timeout": loaded.settings.reconnect_timeout.as_secs(),
+            "connect_timeout": loaded.settings.connect_timeout.as_secs(),
             "queue_expiry": queue_expiry,
             "sources": sources,
             "cards": loaded.cards.keys().collect::<Vec<_>>(),

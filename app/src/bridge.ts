@@ -12,6 +12,10 @@ export type Config = {
   /** Seconds a run queued on another device while offline stays sendable, by default and per command (0: never queued). */
   queue_run_expiry: number
   queue_expiry: Record<string, number>
+  /** Seconds another device shows as reconnecting after losing the desktop, before offline. */
+  reconnect_timeout: number
+  /** Seconds another device waits for the desktop before answering from its cache and opening the stream again. */
+  connect_timeout: number
   sources: Record<string, { item_card?: string | null }>
   cards: string[]
   commands: string[]

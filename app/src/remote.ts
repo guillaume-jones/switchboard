@@ -14,7 +14,7 @@ export type Queued = {
   error?: string
 }
 export type Status = {
-  /** `reconnecting` while the stream is down for less than RECONNECT_MS; reads answer from the cache meanwhile. */
+  /** `reconnecting` while the stream is down for less than the `reconnect_timeout` setting; reads answer from the cache meanwhile. */
   connection: 'online' | 'reconnecting' | 'offline'
   /** The desktop's last contact. */
   asOf: number | undefined
@@ -30,10 +30,8 @@ class Unanswered extends Offline {}
 
 const CLIENT_HEADER = 'switchboard-client'
 const NO_STREAM = 'no open event stream for this client'
-const HELLO_WAIT_MS = 3000
 /** The desktop pings every 10s; a stream silent for longer is dead, as after the phone sleeps or its VPN reconnects. */
 const STREAM_SILENT_MS = 15000
-const RECONNECT_MS = 15000
 const AS_OF_KEY = 'switchboard.as_of'
 
 let status: Status = {
@@ -54,6 +52,8 @@ let streamAt = 0
 let openedAt = 0
 /** When the stream was lost, or the app was opened or woken without one. */
 let lostAt = Date.now()
+let reconnectMs = 10000
+let connectMs = 3000
 
 function contact() {
   lastContact = Date.now()
@@ -64,17 +64,18 @@ function setConnection(connection: Status['connection']) {
   if (status.connection !== connection) setStatus({ connection, asOf: lastContact || undefined })
 }
 
-/** Replaces the stream; the app shows as reconnecting only if the new one does not say hello in HELLO_WAIT_MS. */
+/** Replaces the stream; the app shows as reconnecting until the new one says hello, since its rows may be stale. */
 function lose() {
   if (!client) return
   client = ''
   lostAt = Date.now()
+  setConnection('reconnecting')
   restart()
 }
 
 /**
  * While visible, a dead stream is replaced at once, and one that has not said hello is opened again every
- * HELLO_WAIT_MS: a connection made while the network was not up yet can hang long after a new one would succeed.
+ * `connect_timeout`: a connection made while the network was not up yet can hang long after a new one would succeed.
  */
 function check() {
   if (document.visibilityState !== 'visible') return
@@ -83,8 +84,8 @@ function check() {
     if (now - streamAt < STREAM_SILENT_MS) return
     return lose()
   }
-  if (now - openedAt < HELLO_WAIT_MS) return
-  setConnection(!navigator.onLine || now - lostAt >= RECONNECT_MS ? 'offline' : 'reconnecting')
+  if (now - openedAt < connectMs) return
+  setConnection(!navigator.onLine || now - lostAt >= reconnectMs ? 'offline' : 'reconnecting')
   restart()
 }
 
@@ -288,20 +289,27 @@ function restart() {
 }
 
 /** With a live stream, reads wait for the desktop: a dead stream is replaced on ping silence, which reloads them. */
-const readTimeout = () => (client ? undefined : HELLO_WAIT_MS)
+function applyTimeouts(config: Config) {
+  reconnectMs = (config.reconnect_timeout ?? 10) * 1000
+  connectMs = (config.connect_timeout ?? 3) * 1000
+}
+
+const readTimeout = () => (client ? undefined : connectMs)
 
 /** Waits briefly for the stream's client id, so subscriptions belong to it; offline, answers from the cache. */
-const ready = () => Promise.race([connected, new Promise(resolve => setTimeout(resolve, HELLO_WAIT_MS))])
+const ready = () => Promise.race([connected, new Promise(resolve => setTimeout(resolve, connectMs))])
 
 const handlers: { [C in keyof Commands]: (args: Commands[C]['args']) => Promise<Commands[C]['result']> } = {
   config: async () => {
     try {
       const config = await post('config', {}, readTimeout())
       keep('config', config)
+      applyTimeouts(config)
       return config
     } catch (error) {
       const config = await cached<Config>('config')
       if (!config) throw offline(error)
+      applyTimeouts(config)
       offline(error)
       return config
     }
@@ -359,6 +367,7 @@ const handlers: { [C in keyof Commands]: (args: Commands[C]['args']) => Promise<
 }
 
 export function connect(): Backend {
+  setConnection('reconnecting')
   open()
   loadOutbox()
   navigator.serviceWorker?.register('/sw.js')
@@ -366,7 +375,7 @@ export function connect(): Backend {
   let hiddenAt = 0
   const wake = () => {
     if (document.visibilityState !== 'visible') return void (hiddenAt = Date.now())
-    if (client && Date.now() - hiddenAt >= HELLO_WAIT_MS) lose()
+    if (client && Date.now() - hiddenAt >= connectMs) lose()
     else if (!client) {
       lostAt = Date.now()
       openedAt = 0
@@ -374,7 +383,7 @@ export function connect(): Backend {
     check()
     if (status.connection === 'online') flush()
   }
-  setInterval(check, HELLO_WAIT_MS)
+  setInterval(check, 1000)
   document.addEventListener('visibilitychange', wake)
   window.addEventListener('online', wake)
   return {

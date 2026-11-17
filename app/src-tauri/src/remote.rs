@@ -189,7 +189,8 @@ async fn events(State(app): State<AppHandle>) -> impl IntoResponse {
             (received, closed),
         ))
     });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    let ping = Event::default().event("ping").data("{}");
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(10)).event(ping))
 }
 
 async fn asset(State(app): State<AppHandle>, request: Request) -> Response {

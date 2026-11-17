@@ -96,10 +96,10 @@ const PUSH_PROMPT_DISMISSED = 'switchboard.push_prompt_dismissed'
 
 /** Offered once per installed app, until notifications are enabled or the prompt is dismissed. */
 function PushPrompt() {
-  const { online, push } = useRemoteStatus()
+  const { connection, push } = useRemoteStatus()
   const [dismissed, setDismissed] = useState(() => localStorage.getItem(PUSH_PROMPT_DISMISSED) !== null)
   const [error, setError] = useState('')
-  if (!online || push !== 'off' || dismissed) return null
+  if (connection !== 'online' || push !== 'off' || dismissed) return null
   const dismiss = () => {
     localStorage.setItem(PUSH_PROMPT_DISMISSED, String(Date.now()))
     setDismissed(true)
@@ -118,16 +118,15 @@ function PushPrompt() {
 
 const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
-/** On another device: when the board is from the cache, and the writes and runs waiting to be sent. */
+/** On another device: the writes and runs waiting to be sent. Cards show the connection through `useConnection`. */
 function RemoteStatus() {
-  const { online, asOf, outbox } = useRemoteStatus()
+  const { outbox } = useRemoteStatus()
   const [open, setOpen] = useState(false)
-  if (online && outbox.length === 0) return null
+  if (outbox.length === 0) return null
   return (
     <>
       <div className="status">
-        {!online && <span>Offline{asOf ? ` · as of ${clock(asOf)}` : ''}</span>}
-        {outbox.length > 0 && <button onClick={() => setOpen(true)}>{outbox.length} pending</button>}
+        <button onClick={() => setOpen(true)}>{outbox.length} pending</button>
       </div>
       {open && outbox.length > 0 && (
         <Overlay close={() => setOpen(false)}>

@@ -13,6 +13,11 @@ declare module 'switchboard' {
   export function mutate(name: string, params?: Params): Promise<number>
   /** Starts a command (`prs.fix-ci`); resolves to the run id, rejects with an Error. */
   export function run(name: string, args?: Params): Promise<string>
+  /**
+   * The desktop's reachability from another device; always `online` on the desktop. Reconnecting and offline, the board
+   * shows the last data seen, as of `asOf` (ms since epoch), and queues writes and runs.
+   */
+  export function useConnection(): { state: 'online' | 'reconnecting' | 'offline'; asOf: number | undefined }
   /** Names of every card in `cards/`, updated when cards are added or removed. */
   export function useCards(): string[]
   /** Sets this card's context variables, read by key bindings (`{selected}`). null or undefined means missing. */

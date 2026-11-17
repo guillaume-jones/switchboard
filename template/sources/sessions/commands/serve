@@ -159,6 +159,7 @@ while True:
         global busy
         if closing:
             pending.append(message)
+            claude.terminate()
         elif message.get("interrupt"):
             send({"type": "control_request", "request_id": str(uuid.uuid4()), "request": {"subtype": "interrupt"}})
         elif message.get("text"):

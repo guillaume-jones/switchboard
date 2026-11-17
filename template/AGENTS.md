@@ -109,7 +109,7 @@ Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started i
 `cards/<Name>.tsx` default-exports a React component. Imports allowed: `react`, `react/jsx-runtime`, `switchboard`, and relative paths into `cards/lib/` (tried as written, then `.ts`, `.tsx`, `.js`; no `index`). Cards never import each other; no npm packages, dynamic `import()` or `import.meta`. A dependency-free single-file ESM build of a library can be vendored into `cards/lib/` with its `.d.ts`, like `lib/marked.js`. Each card gets its own instance of its helpers. Render agent or remote text with `renderMarkdown` from `lib/markdown`, never as raw HTML: card HTML runs in the webview, which can start commands.
 
 ```ts
-import { useQuery, mutate, run, useExpose, CardSlot, Item, type CardProps } from "switchboard"
+import { useQuery, mutate, run, useExpose, useCards, useConnection, CardSlot, Item, type CardProps } from "switchboard"
 
 useQuery("prs_items", { id })        // live rows; undefined until loaded; throws on error
 useQuery("prs.search", { text })     // query
@@ -117,6 +117,7 @@ mutate("prs.dismiss", { ref })       // resolves to changed row count
 run("prs.fix-ci", { pr })            // resolves to run id
 useExpose({ selected: "prs:4812" })  // context variables for key bindings
 useCards()                           // names of every card, e.g. for a picker
+useConnection()                      // { state: "online" | "reconnecting" | "offline", asOf } on another device
 <CardSlot component="PRList" props={{}} size="compact" id="prs" />
 <Item ref="prs:4812" size="compact" />
 ```

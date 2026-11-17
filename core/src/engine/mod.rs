@@ -366,6 +366,7 @@ impl Shared {
 
 impl Engine {
     pub fn open(home: &Path, emitter: impl Emitter + 'static) -> Result<Engine> {
+        crate::raise_fd_limit();
         if !home.exists() {
             crate::maintenance::init(home, crate::maintenance::Template::BuiltIn, false)?;
         }

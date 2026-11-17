@@ -75,6 +75,20 @@ pub(crate) fn process_exists(pid: u32) -> bool {
     result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
+/// Every reader connection attaches each source's database and WAL, so the file count grows with connections ×
+/// sources; apps started by launchd get a soft limit of 256. macOS refuses limits above OPEN_MAX.
+pub(crate) fn raise_fd_limit() {
+    const OPEN_MAX: libc::rlim_t = 10240;
+    let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: getrlimit and setrlimit only read and write the rlimit passed to them.
+    unsafe {
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0 && limit.rlim_cur < OPEN_MAX.min(limit.rlim_max) {
+            limit.rlim_cur = OPEN_MAX.min(limit.rlim_max);
+            libc::setrlimit(libc::RLIMIT_NOFILE, &limit);
+        }
+    }
+}
+
 /// Sends SIGKILL to the process group led by `pid`: commands run in their own group, so this also reaches
 /// everything they started.
 pub(crate) fn kill_process_group(pid: u32) {

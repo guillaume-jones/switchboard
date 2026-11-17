@@ -14,7 +14,9 @@ export type Queued = {
   error?: string
 }
 export type Status = {
-  online: boolean
+  /** `reconnecting` while the stream is down for less than RECONNECT_MS; reads answer from the cache meanwhile. */
+  connection: 'online' | 'reconnecting' | 'offline'
+  /** The desktop's last contact. */
   asOf: number | undefined
   outbox: Queued[]
   /** `off` until the user enables notifications; push is only offered by home-screen apps. */
@@ -23,14 +25,19 @@ export type Status = {
 
 /** The desktop is unreachable, or the app on it is not running. */
 class Offline extends Error {}
+/** A read the desktop did not answer in time, or answered for a stream already replaced: the stream stays as it is. */
+class Unanswered extends Offline {}
 
 const CLIENT_HEADER = 'switchboard-client'
-const RETRY_MS = 5000
+const NO_STREAM = 'no open event stream for this client'
 const HELLO_WAIT_MS = 3000
+/** The desktop pings every 10s; a stream silent for longer is dead, as after the phone sleeps or its VPN reconnects. */
+const STREAM_SILENT_MS = 15000
+const RECONNECT_MS = 15000
 const AS_OF_KEY = 'switchboard.as_of'
 
 let status: Status = {
-  online: true,
+  connection: 'online',
   asOf: Number(localStorage.getItem(AS_OF_KEY)) || undefined,
   outbox: [],
   push: 'unavailable',
@@ -42,29 +49,43 @@ function setStatus(next: Partial<Status>) {
   for (const listener of statusListeners) listener()
 }
 
-let streamTimer = 0
-let lastContact = 0
-
-/**
- * Until the stream says hello, it is opened again every HELLO_WAIT_MS: a connection made while the network was not up
- * yet (as while a phone's VPN reconnects) can hang long after a new one would succeed. The app counts as offline once
- * the desktop has not answered anything for that long.
- */
-function reconnecting() {
-  streamTimer ||= window.setTimeout(() => {
-    streamTimer = 0
-    if (client) return
-    if (Date.now() - lastContact >= HELLO_WAIT_MS) setStatus({ online: false })
-    current?.close()
-    if (document.visibilityState === 'visible') open()
-  }, HELLO_WAIT_MS)
-}
+let lastContact = status.asOf ?? 0
+let streamAt = 0
+let openedAt = 0
+/** When the stream was lost, or the app was opened or woken without one. */
+let lostAt = Date.now()
 
 function contact() {
+  lastContact = Date.now()
+  localStorage.setItem(AS_OF_KEY, String(lastContact))
+}
+
+function setConnection(connection: Status['connection']) {
+  if (status.connection !== connection) setStatus({ connection, asOf: lastContact || undefined })
+}
+
+/** Replaces the stream; the app shows as reconnecting only if the new one does not say hello in HELLO_WAIT_MS. */
+function lose() {
+  if (!client) return
+  client = ''
+  lostAt = Date.now()
+  restart()
+}
+
+/**
+ * While visible, a dead stream is replaced at once, and one that has not said hello is opened again every
+ * HELLO_WAIT_MS: a connection made while the network was not up yet can hang long after a new one would succeed.
+ */
+function check() {
+  if (document.visibilityState !== 'visible') return
   const now = Date.now()
-  lastContact = now
-  localStorage.setItem(AS_OF_KEY, String(now))
-  if (!status.online || now - (status.asOf ?? 0) > 1000) setStatus({ online: true, asOf: now })
+  if (client) {
+    if (now - streamAt < STREAM_SILENT_MS) return
+    return lose()
+  }
+  if (now - openedAt < HELLO_WAIT_MS) return
+  setConnection(!navigator.onLine || now - lostAt >= RECONNECT_MS ? 'offline' : 'reconnecting')
+  restart()
 }
 
 export const useRemoteStatus = () =>
@@ -109,13 +130,14 @@ async function loadOutbox() {
 /** The open stream's id, which subscriptions belong to; empty while disconnected. */
 let client = ''
 let connected: Promise<void>
+let hello: (() => void) | undefined
 let current: EventSource | undefined
 /** Something was answered from the cache, or the desktop dropped this client's subscriptions with its last stream. */
 let stale = false
 
 /** Reads that can be answered from the cache give up after `timeout` ms, so a hanging network does not block them. */
 async function post(command: string, args: unknown, timeout?: number) {
-  if (timeout && !status.online) throw new Offline('offline')
+  if (timeout && status.connection === 'offline') throw new Offline('offline')
   let response: Response
   try {
     response = await fetch(`/api/${command}`, {
@@ -124,13 +146,14 @@ async function post(command: string, args: unknown, timeout?: number) {
       body: JSON.stringify(args),
       signal: timeout ? AbortSignal.timeout(timeout) : undefined,
     })
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'TimeoutError') throw new Unanswered('timed out')
     throw new Offline('the desktop is unreachable')
   }
   if (response.status >= 502 && response.status <= 504) throw new Offline('Switchboard is not running on the desktop')
   if (response.status === 403) throw new Error('this device is not allowed to reach the desktop')
   const body = await response.json()
-  if (!response.ok) throw new Error(body.error)
+  if (!response.ok) throw new (body.error === NO_STREAM ? Unanswered : Error)(body.error)
   contact()
   return body
 }
@@ -138,7 +161,7 @@ async function post(command: string, args: unknown, timeout?: number) {
 function offline(error: unknown) {
   if (!(error instanceof Offline)) throw error
   stale = true
-  setStatus({ online: false })
+  if (!(error instanceof Unanswered)) lose()
   return error
 }
 
@@ -228,38 +251,44 @@ const rowKeys = new Map<number, string>()
 let offlineIds = 0
 
 function open() {
-  let hello: () => void
-  connected = new Promise(resolve => (hello = resolve))
+  if (!hello) connected = new Promise(resolve => (hello = resolve))
+  openedAt = Date.now()
   const source = new EventSource('/api/events')
   source.addEventListener('hello', async event => {
     client = JSON.parse(event.data).client
+    streamAt = Date.now()
     contact()
-    hello()
+    setConnection('online')
+    hello?.()
+    hello = undefined
     syncPush()
     await flush()
     if (stale) emit('reconnect', null)
     stale = true
   })
+  source.addEventListener('ping', () => {
+    streamAt = Date.now()
+    contact()
+  })
   for (const name of ['rows', 'config', 'card'] as const) {
     source.addEventListener(name, event => {
+      streamAt = Date.now()
       const payload = JSON.parse(event.data)
       if (name === 'rows' && rowKeys.has(payload.id)) keep(rowKeys.get(payload.id)!, payload.rows)
       emit(name, payload)
     })
   }
-  source.onerror = () => {
-    client = ''
-    reconnecting()
-    if (source.readyState === EventSource.CLOSED) setTimeout(reopen, RETRY_MS)
-  }
+  source.onerror = lose
   current = source
-  reconnecting()
 }
 
-function reopen() {
-  if (current?.readyState !== EventSource.CLOSED || document.visibilityState !== 'visible') return
-  open()
+function restart() {
+  current?.close()
+  if (document.visibilityState === 'visible') open()
 }
+
+/** With a live stream, reads wait for the desktop: a dead stream is replaced on ping silence, which reloads them. */
+const readTimeout = () => (client ? undefined : HELLO_WAIT_MS)
 
 /** Waits briefly for the stream's client id, so subscriptions belong to it; offline, answers from the cache. */
 const ready = () => Promise.race([connected, new Promise(resolve => setTimeout(resolve, HELLO_WAIT_MS))])
@@ -267,7 +296,7 @@ const ready = () => Promise.race([connected, new Promise(resolve => setTimeout(r
 const handlers: { [C in keyof Commands]: (args: Commands[C]['args']) => Promise<Commands[C]['result']> } = {
   config: async () => {
     try {
-      const config = await post('config', {}, HELLO_WAIT_MS)
+      const config = await post('config', {}, readTimeout())
       keep('config', config)
       return config
     } catch (error) {
@@ -279,7 +308,7 @@ const handlers: { [C in keyof Commands]: (args: Commands[C]['args']) => Promise<
   },
   card: async ({ name }) => {
     try {
-      const modules = await post('card', { name }, HELLO_WAIT_MS)
+      const modules = await post('card', { name }, readTimeout())
       keep(`card:${name}`, modules)
       return modules
     } catch (error) {
@@ -291,10 +320,10 @@ const handlers: { [C in keyof Commands]: (args: Commands[C]['args']) => Promise<
   },
   subscribe: async ({ name, params }) => {
     const key = `rows:${name}${JSON.stringify(params)}`
-    if (status.online) await ready()
+    if (status.connection !== 'offline') await ready()
     try {
       if (!client) throw new Offline('not connected')
-      const reply = await post('subscribe', { name, params }, HELLO_WAIT_MS)
+      const reply = await post('subscribe', { name, params })
       rowKeys.set(reply.id, key)
       keep(key, reply.rows)
       return reply
@@ -334,11 +363,18 @@ export function connect(): Backend {
   loadOutbox()
   navigator.serviceWorker?.register('/sw.js')
   navigator.storage?.persist?.()
+  let hiddenAt = 0
   const wake = () => {
-    if (document.visibilityState !== 'visible') return
-    reopen()
-    if (status.online) flush()
+    if (document.visibilityState !== 'visible') return void (hiddenAt = Date.now())
+    if (client && Date.now() - hiddenAt >= HELLO_WAIT_MS) lose()
+    else if (!client) {
+      lostAt = Date.now()
+      openedAt = 0
+    }
+    check()
+    if (status.connection === 'online') flush()
   }
+  setInterval(check, HELLO_WAIT_MS)
   document.addEventListener('visibilitychange', wake)
   window.addEventListener('online', wake)
   return {

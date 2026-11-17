@@ -917,6 +917,28 @@ fn file_rules_fire_on_changes_and_on_appended_matching_lines() {
 }
 
 #[test]
+fn line_rules_keep_lines_appended_just_before_a_reload() {
+    let watched = tempfile::tempdir().unwrap();
+    let log = watched.path().join("app.log");
+    fs::write(&log, "").unwrap();
+    let rule = |id: &str| {
+        let pattern = watched.path().join("*.log").display().to_string();
+        format!(
+            r#"{{"id": "{id}", "when": {{"files": "{pattern}", "line_contains": "ERROR"}}, "into": "log.note", "args": {{"key": "{id} {{line}}"}}}}"#
+        )
+    };
+    let h = home(&[("rules/errors.json", &rule("errors"))]);
+    let (engine, _rx) = open(h.path());
+    until(&engine, "core_rules", json!({"rule": "errors"}), 5, |r| r.len() == 1);
+    std::thread::sleep(Duration::from_millis(300));
+    std::io::Write::write_all(&mut fs::OpenOptions::new().append(true).open(&log).unwrap(), b"ERROR one\n").unwrap();
+    write(h.path(), &[("rules/other.json", &rule("other"))]);
+    until(&engine, "core_rules", json!({"rule": "other"}), 5, |r| r.len() == 1);
+    let notes = until(&engine, "log_notes", json!({}), 5, |r| !r.is_empty());
+    assert!(notes.iter().any(|n| n["key"] == "errors ERROR one"), "{notes:?}");
+}
+
+#[test]
 fn line_rules_fire_while_a_file_is_appended_to_continuously() {
     let watched = tempfile::tempdir().unwrap();
     let log = watched.path().join("app.log");

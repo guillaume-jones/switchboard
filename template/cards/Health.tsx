@@ -1,5 +1,5 @@
-import { useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
-import { Item, mutate, useQuery } from 'switchboard'
+import { useState, type CSSProperties, type ReactNode } from 'react'
+import { Item, mutate, useConnection, useQuery } from 'switchboard'
 
 type AttentionItem = { id: number; ref: string; reason: string | null; level: number }
 type Rule = { rule: string; disabled_reason: string | null }
@@ -9,6 +9,7 @@ type CoreEvent = { id: number; time: string; name: string; message: string }
 const URGENT_LEVEL = 2
 const attentionColor = (level: number) => (level >= URGENT_LEVEL ? 'var(--accent)' : 'var(--info)')
 const RECENT_ERRORS = 20
+const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
 const LINE: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', padding: '4px 0' }
 const MUTED: CSSProperties = { color: 'var(--muted)' }
@@ -25,14 +26,6 @@ const POPOVER: CSSProperties = {
   borderRadius: 'var(--radius)',
   boxShadow: '0 16px 48px #000b',
   zIndex: 1,
-}
-const subscribeToConnection = (onChange: () => void) => {
-  window.addEventListener('online', onChange)
-  window.addEventListener('offline', onChange)
-  return () => {
-    window.removeEventListener('online', onChange)
-    window.removeEventListener('offline', onChange)
-  }
 }
 const BACKDROP: CSSProperties = { position: 'fixed', inset: 0, background: '#0008' }
 const SUMMARY_BUTTON: CSSProperties = {
@@ -54,7 +47,15 @@ export default function Health() {
   const clearedThrough = useQuery<{ through: number }>('attention_errors_cleared')?.[0]?.through ?? 0
   const errors = recentErrors.filter(event => event.id > clearedThrough)
   const [open, setOpen] = useState(false)
-  const online = useSyncExternalStore(subscribeToConnection, () => navigator.onLine)
+  const connection = useConnection()
+  const online = connection.state === 'online'
+  const connectionLabel =
+    connection.state === 'reconnecting'
+      ? 'Reconnecting'
+      : `Offline${connection.asOf ? ` as of ${clock(connection.asOf)}` : ''}`
+  const connectionDot = (
+    <span style={{ color: connection.state === 'reconnecting' ? 'var(--warn)' : 'var(--bad)' }}>●</span>
+  )
 
   const problems = [
     { count: attention.length, one: 'attention item', many: 'attention items' },
@@ -67,7 +68,7 @@ export default function Health() {
   const summary = healthy
     ? 'healthy'
     : [
-        ...(online ? [] : ['offline']),
+        ...(online ? [] : [connectionLabel]),
         ...problems.map(({ count, one, many }) => `${count} ${count === 1 ? one : many}`),
       ].join(' · ')
 
@@ -80,8 +81,8 @@ export default function Health() {
       )}
       {!online && (
         <div style={LINE}>
-          <span style={{ color: 'var(--bad)' }}>●</span>
-          <span>Offline: showing the last data seen; writes and runs are queued until reconnected</span>
+          {connectionDot}
+          <span>{connectionLabel}: showing the last data seen; writes and runs are queued until reconnected</span>
         </div>
       )}
       <Section title="Attention">
@@ -138,7 +139,11 @@ export default function Health() {
     <span style={{ position: 'relative' }}>
       <button onClick={() => setOpen(isOpen => !isOpen)} title={summary} className="health" style={SUMMARY_BUTTON}>
         {healthy && <span style={{ color: 'var(--good)' }}>●</span>}
-        {!online && <span style={{ color: 'var(--bad)' }}>● offline</span>}
+        {!online && (
+          <span>
+            {connectionDot} {connectionLabel}
+          </span>
+        )}
         {attention.length > 0 && (
           <span style={{ color: attentionColor(Math.max(...attention.map(item => item.level))) }}>
             ● {attention.length}

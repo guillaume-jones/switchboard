@@ -129,16 +129,18 @@ fn deliver(inputs: &Receiver<Input>, tx: &Sender<Message>) {
         match input {
             Ok(Input::Watch(watched)) => {
                 files = watched;
+                let previous = std::mem::take(&mut offsets);
                 offsets = files
                     .iter()
                     .filter(|f| f.line_contains.is_some())
                     .flat_map(FileWatch::existing)
                     .filter_map(|path| {
                         let len = path.metadata().ok()?.len();
-                        Some((path, len))
+                        let offset = previous.get(&path).copied().filter(|&offset| offset <= len).unwrap_or(len);
+                        Some((path, offset))
                     })
                     .collect();
-                changed.clear();
+                changed.retain(|path, _| files.iter().any(|f| f.matches(path)));
             }
             Ok(Input::Changed(path)) => {
                 let now = Instant::now();

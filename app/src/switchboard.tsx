@@ -21,6 +21,7 @@ import { loadCard, watchCards, type CardComponent, type LoadedCard } from './car
 import { useLoadedConfig } from './config'
 import { claimFocus, mountSlot, type SlotFrame } from './focus'
 import { subscription } from './subscriptions'
+import { useRemoteStatus } from './remote'
 
 export function useQuery<T extends Row = Row>(name: string, params?: Params): T[] | undefined {
   const query = subscription(name, params)
@@ -34,6 +35,11 @@ export const mutate = (name: string, params: Params = {}) => bridge.mutate(name,
 export const run = (name: string, args: Params = {}) => bridge.run(name, args).then(r => r.run_id)
 
 export const useCards = () => useLoadedConfig().cards
+
+export function useConnection() {
+  const { connection, asOf } = useRemoteStatus()
+  return { state: connection, asOf }
+}
 
 const FrameContext = createContext<SlotFrame | null>(null)
 

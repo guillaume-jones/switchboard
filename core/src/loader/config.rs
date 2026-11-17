@@ -28,6 +28,8 @@ pub struct Settings {
     pub hotkey: String,
     /// A view whose row count is shown on the dock icon or tray; empty for none.
     pub badge: String,
+    /// A view of the folders (`cwd`) of agent turns in progress; the folder is not reloaded while one is inside it.
+    pub editing: String,
     /// The HTTPS port `tailscale serve` exposes the board on to other devices; `None` keeps it local.
     pub remote: Option<u16>,
     /// How long another device may hold a run it queued while offline before it is dropped instead of sent.
@@ -120,6 +122,7 @@ impl Settings {
             terminal: text("terminal", "Terminal"),
             hotkey: text("hotkey", "cmd-shift-space"),
             badge: text("badge", ""),
+            editing: text("editing", ""),
             remote,
             queue_run_expiry,
             push: text("push", "idle"),

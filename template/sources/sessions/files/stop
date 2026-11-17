@@ -1,0 +1,15 @@
+"""Reads a Stop hook event on stdin. When Claude worked in the Switchboard folder and the folder fails `swb check`, prints
+the hook's block decision with the errors, so Claude fixes them before it finishes; once per stop."""
+import json, os, subprocess, sys
+
+event = json.load(sys.stdin)
+home = os.path.realpath(os.environ.get("SWITCHBOARD_HOME") or os.path.expanduser("~/.switchboard"))
+cwd = os.path.realpath(event.get("cwd") or "/")
+if event.get("hook_event_name") != "Stop" or event.get("stop_hook_active") or os.path.commonpath([cwd, home]) != home:
+    sys.exit()
+check = subprocess.run([os.environ.get("SWB") or "swb", "check"], capture_output=True, text=True,
+                       env={**os.environ, "SWITCHBOARD_HOME": home})
+if check.returncode:
+    errors = "\n".join(l for l in (check.stdout + check.stderr).splitlines() if ": warning: " not in l)
+    reason = f"The Switchboard folder fails to load, so the app keeps running its previous version. Fix this before you finish:\n{errors}"
+    print(json.dumps({"decision": "block", "reason": reason}))

@@ -102,7 +102,17 @@ def observe(event):
         report("StopFailure" if failed else "Stop", last_assistant_message=event.get("result") or None)
 
 
-tool_at, asking, decisions = time.monotonic(), False, None
+tool_at, asking, decisions, blocked = time.monotonic(), False, None, False
+
+
+def stop_block():
+    """files/stop's block decision for this turn's end, as its Stop hook would give it."""
+    event = {"hook_event_name": "Stop", "cwd": cwd, "stop_hook_active": blocked}
+    stop = subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), "..", "files", "stop")],
+                          input=json.dumps(event), capture_output=True, text=True)
+    return json.loads(stop.stdout) if stop.stdout.strip() else None
+
+
 decisions_path = lambda: os.path.join(os.environ["SWITCHBOARD_HOME"], "data", "decisions", session)
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
 atexit.register(lambda: decisions and os.path.exists(decisions_path()) and os.remove(decisions_path()))
@@ -194,9 +204,13 @@ while True:
                     ask(event["request_id"], event["request"])
                 elif event.get("type") == "control_cancel_request":
                     asks.pop(event.get("request_id"), None)
+                if event.get("type") == "result" and event.get("subtype") == "success" and (block := stop_block()):
+                    blocked = True
+                    send({"type": "user", "message": {"role": "user", "content": block["reason"]}})
+                    continue
                 observe(event)
                 if event.get("type") == "result":
-                    busy, idle_since = False, time.monotonic()
+                    busy, idle_since, blocked = False, time.monotonic(), False
     code = claude.wait()
     reports.join()
     if decisions:

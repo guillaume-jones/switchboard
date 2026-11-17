@@ -11,13 +11,12 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type ReactNode,
   type SyntheticEvent,
 } from 'react'
 import { Boundary } from './boundary'
 import * as bridge from './bridge'
 import type { Params, Row, Size } from './bridge'
-import { loadCard, watchCards, type CardComponent, type LoadedCard } from './cards'
+import { loadCard, watchCards, type CardComponent } from './cards'
 import { useLoadedConfig } from './config'
 import { claimFocus, mountSlot, type SlotFrame } from './focus'
 import { subscription } from './subscriptions'
@@ -75,22 +74,6 @@ export const CardSlot = memo(function CardSlot({ component, props, size = 'full'
   })
   useEffect(() => mountSlot(frame, el.current!), [frame])
   const claim = (e: SyntheticEvent) => claimFocus(frame, e.nativeEvent)
-  const slot = (loaded: LoadedCard): ReactNode => {
-    const previous = loaded.replaced?.previous
-    return (
-      <Boundary
-        key={loaded.generation}
-        card={component}
-        root={!parent}
-        loaded={loaded}
-        previous={previous && (() => slot(previous))}
-      >
-        <Suspense fallback={null}>
-          <Card component={loaded.component} props={{ ...props, size, slot: id }} />
-        </Suspense>
-      </Boundary>
-    )
-  }
   return (
     <FrameContext value={frame}>
       <div className="slot" ref={el} onPointerDown={claim} onFocus={claim}>
@@ -99,7 +82,11 @@ export const CardSlot = memo(function CardSlot({ component, props, size = 'full'
             {component}: nesting deeper than {depth_cap}
           </div>
         ) : (
-          slot(card)
+          <Boundary key={card.generation} card={component} root={!parent}>
+            <Suspense fallback={null}>
+              <Card component={card.component} props={{ ...props, size, slot: id }} />
+            </Suspense>
+          </Boundary>
         )}
       </div>
     </FrameContext>

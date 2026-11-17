@@ -21,8 +21,6 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-const LOAD_ERROR_GRACE: Duration = Duration::from_secs(15);
-
 /// Receives what the engine pushes to the shell: `rows`, `config`, `card` and `notify`.
 pub trait Emitter: Send + Sync {
     fn emit(&self, event: &str, payload: Value);
@@ -188,7 +186,8 @@ pub(crate) struct Shared {
     triggers: triggers::Triggers,
     loaded: RwLock<Arc<Loaded>>,
     load_errors: RwLock<Vec<Diagnostic>>,
-    reloads: AtomicU64,
+    /// Set while a reload waits for agent turns editing the folder to end.
+    reload_pending: AtomicBool,
     /// False while only the core source runs because the folder failed to load at startup.
     folder_loaded: AtomicBool,
     readers: Mutex<ReaderPool>,
@@ -320,26 +319,35 @@ impl Shared {
         self.refresh(refreshes);
     }
 
-    /// Swaps in a clean load of the folder; otherwise keeps the current one and reports the errors unless another reload
-    /// follows within LOAD_ERROR_GRACE, as while an agent is still editing.
-    fn reload(self: &Arc<Self>, conn: &mut Connection) {
-        let reload = self.reloads.fetch_add(1, SeqCst) + 1;
+    /// Whether a row of the `editing` view puts an agent turn in this folder.
+    fn editing(&self, conn: &Connection) -> bool {
+        let view = &self.loaded().settings.editing;
+        if view.is_empty() {
+            return false;
+        }
+        let Ok(mut statement) = conn.prepare_cached(&format!("SELECT cwd FROM \"{view}\"")) else { return false };
+        let Ok(rows) = statement.query_map([], |row| row.get::<_, Option<String>>(0)) else { return false };
+        rows.flatten().flatten().any(|cwd| fs::canonicalize(cwd).is_ok_and(|cwd| cwd.starts_with(&self.home)))
+    }
+
+    /// Swaps in a clean load of the folder; otherwise keeps the current one and reports its new errors. Unless forced,
+    /// waits while an agent turn is editing the folder, so a half-made change never runs.
+    fn reload(&self, conn: &mut Connection, force: bool) {
+        if !force && self.editing(conn) {
+            self.reload_pending.store(true, SeqCst);
+            return;
+        }
+        self.reload_pending.store(false, SeqCst);
         let loaded = match load(&self.home, Mode::Apply) {
             Ok(loaded) => Arc::new(loaded),
             Err(diagnostics) => {
-                let errors: Vec<Event> = diagnostics
-                    .iter()
-                    .filter(|d| d.is_error())
-                    .map(|d| Event::error("loader", &d.path, d.message.clone()))
-                    .collect();
-                let shared = self.clone();
-                thread::spawn(move || {
-                    thread::sleep(LOAD_ERROR_GRACE);
-                    if shared.reloads.load(SeqCst) == reload {
-                        errors.into_iter().for_each(|e| shared.record(e));
+                {
+                    let mut reported = self.load_errors.write().unwrap();
+                    for d in diagnostics.iter().filter(|d| d.is_error() && !reported.contains(d)) {
+                        self.record(Event::error("loader", &d.path, d.message.clone()));
                     }
-                });
-                *self.load_errors.write().unwrap() = diagnostics;
+                    *reported = diagnostics;
+                }
                 self.emitter.emit("config", Value::Null);
                 return;
             }
@@ -422,7 +430,7 @@ impl Engine {
             triggers: triggers::Triggers::new(tx.clone()),
             loaded: RwLock::new(loaded.clone()),
             load_errors: RwLock::new(load_errors.clone()),
-            reloads: AtomicU64::new(0),
+            reload_pending: AtomicBool::new(false),
             folder_loaded: AtomicBool::new(load_errors.is_empty()),
             readers: Mutex::default(),
             subscriptions: Mutex::default(),

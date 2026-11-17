@@ -1,6 +1,6 @@
 # Switchboard folder
 
-The Switchboard app loads this folder on every save. Run `swb check` before you finish: it is the same loader the app and the pre-commit hook run. A change that fails to load never replaces the running state; its errors go to `core_events` and are raised as attention items.
+The Switchboard app loads this folder on every save. Run `swb check` before you finish: it is the same loader the app and the pre-commit hook run. While a session working in this folder is mid-turn, the app waits to load it until the turn ends, so files can change in any order. A change that fails to load never replaces the running state; its errors go to `core_events` and are raised as attention items, and a turn ending with them is sent back to you once to fix.
 
 ## Layout
 
@@ -92,6 +92,7 @@ Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started i
 | `terminal` | `"Terminal"` | app `sessions.launch` and `sessions.open` open (e.g. `"Ghostty"`); on Linux a command taking `-e` (e.g. `"ghostty"`), and `"Terminal"` picks the first installed of `x-terminal-emulator`, `gnome-terminal`, `konsole` and `xterm` |
 | `hotkey` | `"cmd-shift-space"` | global bring-forward key; `""` disables |
 | `badge` | `""` | view whose row count shows on the dock icon (the tray on Linux) |
+| `editing` | `""` | view of agent turns in progress (`cwd`); the folder reloads only while none is inside it |
 | `max_per_hour` / `max_depth` / `max_concurrency` | `20` / `5` / `4` | rule limits |
 | `timeout` | `600` | command timeout |
 | `open_run_expiry` | `86400` | |

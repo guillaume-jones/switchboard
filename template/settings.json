@@ -2,5 +2,6 @@
   "root": "Root",
   "terminal": "Terminal",
   "hotkey": "cmd-shift-space",
-  "badge": "attention_open"
+  "badge": "attention_open",
+  "editing": "sessions_editing"
 }

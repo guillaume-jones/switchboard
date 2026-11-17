@@ -122,7 +122,7 @@ impl WriteLoop {
             let refreshes = self.shared.refreshes_after(&dirty, &settled.enabled_rules);
             self.shared.refresh(refreshes);
 
-            let mut reload = settled.reload;
+            let mut force_reload = false;
             for (id, args) in settled.restores {
                 let restored = crate::maintenance::restore(&self.shared.home, &mut self.conn, &loaded, &args);
                 let (state, summary) = match &restored {
@@ -132,11 +132,11 @@ impl WriteLoop {
                 let _ = self.shared.tx.send(Message::RunExited { id, state, summary: Some(summary) });
                 if restored.is_ok() {
                     self.memory.fired_keys.clear();
-                    reload = true;
+                    force_reload = true;
                 }
             }
-            if reload {
-                self.shared.reload(&mut self.conn);
+            if settled.reload || force_reload || self.shared.reload_pending.load(SeqCst) {
+                self.shared.reload(&mut self.conn, force_reload);
             }
             if settled.stop {
                 let _ = self.shared.refresh_queue.send(None);
@@ -272,16 +272,19 @@ struct Batch<'a> {
 }
 
 impl Batch<'_> {
-    /// Runs the writer in its own savepoint. Failures, and writes that changed rows, are recorded as events.
+    /// Runs the writer in its own savepoint. Failures, and writes that changed rows, are recorded as events, except a
+    /// missing writer named by hand with `swb`, which only its caller needs to hear about.
     fn write(&mut self, name: &str, params: &Value, origin: &Origin) -> Result<usize> {
         let Some(writer) = self.loaded.writers.get(name) else {
             let message = format!("no writer named {name}");
-            self.events.push(Event {
-                kind: EventKind::Error,
-                name: name.into(),
-                origin: origin.clone(),
-                message: message.clone(),
-            });
+            if origin.trigger != "swb" || origin.run_id.is_some() {
+                self.events.push(Event {
+                    kind: EventKind::Error,
+                    name: name.into(),
+                    origin: origin.clone(),
+                    message: message.clone(),
+                });
+            }
             bail!(message);
         };
         self.conn.execute_batch("SAVEPOINT w")?;

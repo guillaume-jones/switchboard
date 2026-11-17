@@ -484,8 +484,7 @@ impl Shared {
 
     pub(crate) fn query(&self, name: &str, params: Value) -> Result<Value> {
         let loaded = self.loaded();
-        let read = resolve(&loaded, name, &params)
-            .inspect_err(|e| self.record(Event::error("query", name, format!("{e:#}"))))?;
+        let read = resolve(&loaded, name, &params)?;
         Ok(self.with_reader(|conn| self.timed_read(conn, name, &read))??.rows)
     }
 }

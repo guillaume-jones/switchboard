@@ -1,10 +1,10 @@
-use switchboard_core::{Emitter, Engine, Origin};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
+use switchboard_core::{Emitter, Engine, Origin};
 
 struct Events(Mutex<Sender<(String, Value)>>);
 
@@ -134,18 +134,18 @@ fn writes_and_errors_are_logged_to_events() {
     let run = Origin { trigger: "swb".into(), run_id: Some("r1".into()) };
     engine.write("prs.upsert", json!({"id": 1, "title": "x", "state": "open"}), run).unwrap();
     assert!(engine.write("prs.nope", json!({}), card()).is_err());
-    let _ = engine.query("prs_nope", json!({}));
+    assert!(engine.query("prs_nope", json!({})).is_err());
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut errors = loop {
         let errors = engine.query("core_events", json!({"kind": "error"})).unwrap().as_array().unwrap().clone();
-        if errors.len() >= 2 || Instant::now() > deadline {
+        if !errors.is_empty() || Instant::now() > deadline {
             break errors;
         }
     };
     errors.sort_by_key(|e| e["id"].as_i64());
     let summary: Vec<(&str, &str)> =
         errors.iter().map(|e| (e["name"].as_str().unwrap(), e["trigger"].as_str().unwrap())).collect();
-    assert_eq!(summary, [("prs.nope", "card"), ("prs_nope", "query")]);
+    assert_eq!(summary, [("prs.nope", "card")]);
     let writes = engine.query("core_events", json!({"kind": "write"})).unwrap();
     assert_eq!(
         (writes[0]["name"].as_str(), writes[0]["trigger"].as_str(), writes[0]["run_id"].as_str()),
@@ -226,6 +226,40 @@ fn broken_edit_keeps_last_good_state_and_fix_reloads() {
     let rows = seen.iter().find(with_url).expect("rows pushed after reload");
     assert_eq!(rows.1["rows"][1], json!({"id": 2, "title": "y", "state": "open", "url": null}));
     assert!(seen.iter().any(|(e, _)| e == "config"));
+}
+
+#[test]
+fn edits_wait_for_agent_turns_in_the_folder_to_end() {
+    let (dir, engine, _rx) = open();
+    let home = dir.path().to_str().unwrap();
+    write(
+        dir.path(),
+        &[
+            ("sources/agents/schema.sql", "CREATE TABLE turns (\n  cwd TEXT\n);\n"),
+            ("sources/agents/views/editing.sql", "SELECT cwd FROM agents.turns"),
+            ("sources/agents/writes/start.sql", "INSERT INTO agents.turns (cwd) VALUES (:cwd)"),
+            ("sources/agents/writes/stop.sql", "DELETE FROM agents.turns"),
+            ("settings.json", r#"{"editing": "agents_editing"}"#),
+        ],
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while engine.write("agents.start", json!({"cwd": "/elsewhere"}), card()).is_err() {
+        assert!(Instant::now() < deadline, "agents source not loaded");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    engine.write("prs.upsert", json!({"id": 1, "title": "x", "state": "open"}), card()).unwrap();
+    engine.write("agents.start", json!({"cwd": format!("{home}/sources")}), card()).unwrap();
+
+    write(dir.path(), &[("sources/prs/views/items.sql", "SELECT id, title FROM prs.items")]);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(engine.query("prs_items", json!({})).unwrap(), json!([{"id": 1, "title": "x", "state": "open"}]));
+
+    engine.write("agents.stop", json!({}), card()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while engine.query("prs_items", json!({})).unwrap() != json!([{"id": 1, "title": "x"}]) {
+        assert!(Instant::now() < deadline, "the edit was not applied once the turn ended");
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[test]

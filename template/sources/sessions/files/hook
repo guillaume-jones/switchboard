@@ -1,7 +1,13 @@
 #!/bin/dash
 # Records a Claude Code hook event (JSON on stdin) in sessions.items, with the host app (bundle id, else $TERM_PROGRAM) and entrypoint it ran under.
 # A session Switchboard holds reports through sessions.serve instead, so its own hooks stop here, except for files/decide.
+# A Stop in the Switchboard folder that fails to load is blocked with the errors instead (files/stop), so Claude fixes them first.
 # dash, not zsh: it starts in half the time, and this runs on every tool call.
 [ -n "$SWB_HELD_PID" ] && [ "$SWB_HELD_PID" = "$CLAUDE_PID" ] && [ -z "$SWB_HOOK_ALWAYS" ] && exit 0
 PATH=$PATH:/usr/local/bin:/Applications/Switchboard.app/Contents/MacOS
-exec "${SWB:-swb}" write sessions.claude_hook host="${SWB_SESSION_HOST:-${__CFBundleIdentifier:-$TERM_PROGRAM}}" entrypoint="$CLAUDE_CODE_ENTRYPOINT"
+payload=$(cat)
+case $payload in *'"Stop"'*)
+  block=$(printf '%s' "$payload" | python3 "${0%/*}/stop")
+  [ -n "$block" ] && printf '%s\n' "$block" && exit 0 ;;
+esac
+printf '%s' "$payload" | "${SWB:-swb}" write sessions.claude_hook host="${SWB_SESSION_HOST:-${__CFBundleIdentifier:-$TERM_PROGRAM}}" entrypoint="$CLAUDE_CODE_ENTRYPOINT"

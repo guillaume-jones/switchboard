@@ -63,7 +63,7 @@ pub enum Level {
     Warning,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
     /// Relative to the folder, possibly with `:line:column`.
     pub path: String,
@@ -234,6 +234,9 @@ fn load_scoped(home: &Path, mode: Mode, scope: Scope) -> Result<Loaded, Vec<Diag
     let settings = Settings::parse(&settings_json, &mut diags);
     if !settings.badge.is_empty() && !views.contains_key(&settings.badge) {
         diags.error("settings.json", format!("badge: no view named {}", settings.badge));
+    }
+    if !settings.editing.is_empty() && !views.contains_key(&settings.editing) {
+        diags.error("settings.json", format!("editing: no view named {}", settings.editing));
     }
 
     let card_modules = match scope {

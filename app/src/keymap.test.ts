@@ -101,4 +101,9 @@ test('key names', () => {
   expect(eventKey(ev({ shiftKey: true, code: 'Slash', key: '?' }))).toBe('?')
   expect(eventKey(ev({ metaKey: true, code: 'BracketRight', key: ']' }))).toBe('cmd-]')
   expect(eventKey(ev({ shiftKey: true, code: 'Enter', key: 'Enter' }))).toBe('shift-enter')
+  const click = (init: Partial<MouseEvent>) =>
+    ({ ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, button: 0, ...init }) as MouseEvent
+  expect(eventKey(click({ button: 3 }))).toBe('mouse-back')
+  expect(eventKey(click({ button: 4, metaKey: true }))).toBe('cmd-mouse-forward')
+  expect(eventKey(click({ button: 0, metaKey: true }))).toBe('')
 })

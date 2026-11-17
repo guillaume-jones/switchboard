@@ -170,13 +170,17 @@ export function normalizeKey(key: string): string {
   return [...MODIFIERS.filter(m => held.includes(m)), base].join('-')
 }
 
+const MOUSE_BUTTONS: Partial<Record<number, string>> = { 3: 'mouse-back', 4: 'mouse-forward' }
+
 /**
- * A keydown in `normalizeKey` form. Letters and digits come from the physical key, so alt-f stays `alt-f`
- * rather than `alt-ƒ`; shift is dropped when it only selects a symbol, so shift-/ is `?`.
+ * A keydown or mouse button in `normalizeKey` form, `''` for an unnamed button. Letters and digits come from the
+ * physical key, so alt-f stays `alt-f` rather than `alt-ƒ`; shift is dropped when it only selects a symbol, so
+ * shift-/ is `?`.
  */
-export function eventKey(e: KeyboardEvent): string {
-  const letterOrDigit = /^(?:Key|Digit)(.)$/.exec(e.code)?.[1].toLowerCase()
-  const base = letterOrDigit ?? (e.key === ' ' ? 'space' : e.key.toLowerCase())
+export function eventKey(e: KeyboardEvent | MouseEvent): string {
+  const letterOrDigit = 'code' in e ? /^(?:Key|Digit)(.)$/.exec(e.code)?.[1].toLowerCase() : undefined
+  const base = 'key' in e ? (letterOrDigit ?? (e.key === ' ' ? 'space' : e.key.toLowerCase())) : MOUSE_BUTTONS[e.button]
+  if (!base) return ''
   const held: Record<Modifier, boolean> = {
     ctrl: e.ctrlKey,
     alt: e.altKey,

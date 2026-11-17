@@ -145,7 +145,7 @@ The same cards run on a phone, served by the desktop (see `remote`). `Root` sets
 { "key": "ctrl-tab", "context": "card:Boards", "write": "ui.next_board", "args": { "client": "{client}" } }
 ```
 
-Exactly one of `command` (source, built-in, or shell: `palette.open`, `card.focus_next`, `card.focus_prev`, `keymap.context`) or `write`; `null` unbinds. Context: `card:<Name>`, variable names, `&&`, `||`, `!`, `>` (descendant), parentheses. Innermost match wins. `{var}` is the nearest card's, `{Card.var}` explicit; a missing variable disables the binding. `keymap.context` (cmd-shift-k) shows the stack and which binding a key hits.
+`key` is a key with optional `ctrl-`/`alt-`/`shift-`/`cmd-` modifiers, or the mouse buttons `mouse-back` and `mouse-forward`. Exactly one of `command` (source, built-in, or shell: `palette.open`, `card.focus_next`, `card.focus_prev`, `keymap.context`) or `write`; `null` unbinds. Context: `card:<Name>`, variable names, `&&`, `||`, `!`, `>` (descendant), parentheses. Innermost match wins. `{var}` is the nearest card's, `{Card.var}` explicit; a missing variable disables the binding. `keymap.context` (cmd-shift-k) shows the stack and which binding a key hits.
 
 ## Built-ins
 

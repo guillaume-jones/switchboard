@@ -62,11 +62,11 @@ function LoadedShell({ config }: { config: Config }) {
 
   useEffect(() => {
     if (overlay) return
-    const onKeyDown = (e: KeyboardEvent) => {
+    const onInput = (e: KeyboardEvent | MouseEvent) => {
       if (e.defaultPrevented) return
       const editing =
         e.target instanceof HTMLElement && (e.target.isContentEditable || e.target.closest('input, textarea, select'))
-      if (editing && !e.metaKey && !e.ctrlKey) return
+      if (e instanceof KeyboardEvent && editing && !e.metaKey && !e.ctrlKey) return
       const candidates = bindingsByKey.get(eventKey(e))
       const hit = candidates && firesFirst(matchBindings(candidates, activeStack()))
       if (!hit) return
@@ -74,8 +74,12 @@ function LoadedShell({ config }: { config: Config }) {
       const action = bindingAction(hit.binding)
       if (action) execute(action, hit.args)
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    window.addEventListener('keydown', onInput)
+    window.addEventListener('mouseup', onInput)
+    return () => {
+      window.removeEventListener('keydown', onInput)
+      window.removeEventListener('mouseup', onInput)
+    }
   }, [overlay, bindingsByKey, execute])
 
   return (

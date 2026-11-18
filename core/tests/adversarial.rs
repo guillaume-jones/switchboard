@@ -1,6 +1,5 @@
 // Adversarial review tests. Each test name states the guarantee it attacks.
 // Tests that FAIL expose a real defect; passing tests confirm the guarantee holds.
-use switchboard_core::{Diagnostic, Emitter, Engine, Mode, Origin, load};
 use serde_json::{Value, json};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -8,6 +7,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
+use switchboard_core::{Diagnostic, Emitter, Engine, Mode, Origin, load};
 
 fn write(home: &Path, files: &[(&str, &str)]) {
     for (path, text) in files {

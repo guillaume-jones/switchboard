@@ -1,4 +1,3 @@
-use switchboard_core::{Emitter, Engine, Mode, Origin, load};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
@@ -6,6 +5,7 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::{Duration, Instant};
+use switchboard_core::{Emitter, Engine, Mode, Origin, load};
 
 const SOURCES: usize = 20;
 const ROWS: i64 = 10_000;

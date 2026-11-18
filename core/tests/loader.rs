@@ -1,6 +1,6 @@
-use switchboard_core::{Diagnostic, Level, Loaded, Mode, load};
 use std::fs;
 use std::path::Path;
+use switchboard_core::{Diagnostic, Level, Loaded, Mode, load};
 
 fn write(home: &Path, files: &[(&str, &str)]) {
     for (path, text) in files {
@@ -616,10 +616,21 @@ fn push_and_idle_after() {
 fn remote_and_queue_expiry() {
     let h = home(PRS);
     assert_eq!(ok(h.path(), Mode::Check).settings.remote, None);
-    write(h.path(), &[("settings.json", r#"{"remote": 8443, "queue_run_expiry": 60, "reconnect_timeout": 5, "connect_timeout": 2}"#)]);
+    write(
+        h.path(),
+        &[(
+            "settings.json",
+            r#"{"remote": 8443, "queue_run_expiry": 60, "reconnect_timeout": 5, "connect_timeout": 2}"#,
+        )],
+    );
     let settings = ok(h.path(), Mode::Check).settings;
     assert_eq!(
-        (settings.remote, settings.queue_run_expiry.as_secs(), settings.reconnect_timeout.as_secs(), settings.connect_timeout.as_secs()),
+        (
+            settings.remote,
+            settings.queue_run_expiry.as_secs(),
+            settings.reconnect_timeout.as_secs(),
+            settings.connect_timeout.as_secs()
+        ),
         (Some(8443), 60, 5, 2)
     );
     write(h.path(), &[("settings.json", r#"{"remote": 70000}"#)]);

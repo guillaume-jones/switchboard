@@ -1,4 +1,3 @@
-use switchboard_core::{Emitter, Engine};
 use serde_json::{Value, json};
 use std::fs;
 use std::io::Write;
@@ -6,6 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
+use switchboard_core::{Emitter, Engine};
 
 struct Quiet;
 

@@ -38,9 +38,11 @@ pub fn init(home: &Path, template: Template, force: bool) -> Result<()> {
         if lock.is_ok_and(|l| matches!(l.try_lock(), Err(fs::TryLockError::WouldBlock))) {
             bail!("Switchboard has {} open; quit it first", home.display());
         }
-        let commits = git(home, &["rev-list", "--count", "HEAD"]).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
+        let commits =
+            git(home, &["rev-list", "--count", "HEAD"]).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
         let changes = git(home, &["status", "--porcelain"]).map(|o| o.stdout);
-        let untouched = home.join(".git").is_dir() && commits.is_ok_and(|c| c == "1") && changes.is_ok_and(|c| c.is_empty());
+        let untouched =
+            home.join(".git").is_dir() && commits.is_ok_and(|c| c == "1") && changes.is_ok_and(|c| c.is_empty());
         if !untouched && !force {
             bail!("{} has commits or changes of its own; pass --force to replace it", home.display());
         }

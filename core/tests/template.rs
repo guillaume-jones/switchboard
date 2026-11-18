@@ -1,10 +1,10 @@
-use switchboard_core::{Emitter, Engine, Mode, Origin, load};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
+use switchboard_core::{Emitter, Engine, Mode, Origin, load};
 
 struct Events(Mutex<Sender<(String, Value)>>);
 
@@ -212,8 +212,13 @@ fn sessions_keep_the_last_message_and_pending_decisions() {
     let session = engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0].clone();
     assert_eq!(session["answer"], r#"{"behavior":"allow"}"#);
     let session = hook(json!({"hook_event_name": "PostToolUse", "tool_name": "Bash"}), None);
-    assert_eq!((session["status"].as_str(), session["decision"].is_null(), session["answer"].is_null()), (Some("working"), true, true));
-    let recent = |hidden: i64| engine.query("sessions.recent", json!({"limit": 10, "hidden": hidden})).unwrap().as_array().unwrap().len();
+    assert_eq!(
+        (session["status"].as_str(), session["decision"].is_null(), session["answer"].is_null()),
+        (Some("working"), true, true)
+    );
+    let recent = |hidden: i64| {
+        engine.query("sessions.recent", json!({"limit": 10, "hidden": hidden})).unwrap().as_array().unwrap().len()
+    };
     assert_eq!((recent(0), recent(1)), (1, 0));
     engine.write("sessions.hide", json!({"id": "s1"}), card()).unwrap();
     assert_eq!((recent(0), recent(1)), (0, 1));
@@ -235,22 +240,32 @@ fn sessions_held_by_serve_are_live_until_the_run_ends() {
     let (engine, _rx) = open(&dir.path().join("home"));
     let payload = json!({"session_id": "s1", "cwd": "/tmp", "hook_event_name": "UserPromptSubmit", "prompt": "go"});
     let params = json!({"payload": payload.to_string(), "host": "switchboard", "entrypoint": "sdk-cli"});
-    engine.write("sessions.claude_hook", params, Origin { trigger: "swb".into(), run_id: Some("serve1".into()) }).unwrap();
+    engine
+        .write("sessions.claude_hook", params, Origin { trigger: "swb".into(), run_id: Some("serve1".into()) })
+        .unwrap();
     let session = &engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0];
-    assert_eq!((&session["status"], &session["kind"], &session["live"]), (&json!("working"), &json!("background"), &json!(1)));
-    assert_eq!(engine.query("sessions_served", json!({})).unwrap(), json!([{"session": "s1", "run_id": "serve1", "cwd": null}]));
+    assert_eq!(
+        (&session["status"], &session["kind"], &session["live"]),
+        (&json!("working"), &json!("background"), &json!(1))
+    );
+    assert_eq!(
+        engine.query("sessions_served", json!({})).unwrap(),
+        json!([{"session": "s1", "run_id": "serve1", "cwd": null}])
+    );
     engine.finish_run("serve1", true, None).unwrap();
     let session = &engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0];
-    assert_eq!((&session["status"], &session["kind"], &session["live"]), (&json!("ready"), &json!("background"), &json!(0)));
+    assert_eq!(
+        (&session["status"], &session["kind"], &session["live"]),
+        (&json!("ready"), &json!("background"), &json!(0))
+    );
 }
 
 #[test]
 fn transcripts_keep_messages_of_open_sessions_only() {
     let (_dir, engine, _rx) = template_home();
-    let add = |lines: Value| engine.write("sessions.transcript_add", json!({"payload": lines.to_string()}), card()).unwrap();
-    let line = |uuid: &str, session: &str, kind: &str, content: Value| {
-        json!({"uuid": uuid, "sessionId": session, "type": kind, "timestamp": format!("2026-01-01T00:00:0{uuid}Z"), "message": {"role": kind, "content": content}})
-    };
+    let add =
+        |lines: Value| engine.write("sessions.transcript_add", json!({"payload": lines.to_string()}), card()).unwrap();
+    let line = |uuid: &str, session: &str, kind: &str, content: Value| json!({"uuid": uuid, "sessionId": session, "type": kind, "timestamp": format!("2026-01-01T00:00:0{uuid}Z"), "message": {"role": kind, "content": content}});
     let first = line("1", "s1", "user", json!("hello"));
     assert_eq!(add(json!([first])), 0, "closed sessions keep nothing");
     engine.write("sessions.transcript_open", json!({"session": "s1"}), card()).unwrap();

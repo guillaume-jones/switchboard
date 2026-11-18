@@ -41,6 +41,8 @@ pub(crate) enum Occurrence {
 enum Input {
     Watch(Vec<FileWatch>),
     Changed(PathBuf),
+    /// The OS dropped change events, so any watched file may have changed unseen.
+    Rescan,
     System(SystemEvent, Duration),
 }
 
@@ -59,7 +61,8 @@ impl Triggers {
     }
 
     /// Replaces the watcher with one for the loaded rules' `when.files`, and returns the roots it cannot watch. Roots
-    /// that do not exist, such as another app's folder before its first run, are skipped until the next reload.
+    /// that do not exist, such as another app's folder before its first run, are skipped until the next reload. The new
+    /// watcher starts before the old one stops, so no change goes unseen in between.
     pub(super) fn watch(&self, loaded: &Loaded) -> Vec<anyhow::Error> {
         let files: Vec<FileWatch> = loaded
             .rules
@@ -70,9 +73,9 @@ impl Triggers {
             })
             .collect();
         let mut current = self.watcher.lock().unwrap();
-        *current = None;
-        let _ = self.input.send(Input::Watch(files.clone()));
         if files.is_empty() {
+            *current = None;
+            let _ = self.input.send(Input::Watch(files));
             return Vec::new();
         }
         let (input, tx, patterns) = (self.input.clone(), self.tx.clone(), files.clone());
@@ -82,6 +85,9 @@ impl Triggers {
             }) else {
                 return;
             };
+            if event.need_rescan() {
+                let _ = input.send(Input::Rescan);
+            }
             if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
                 for path in event.paths.into_iter().filter(|p| patterns.iter().any(|f| f.matches(p))) {
                     let _ = input.send(Input::Changed(path));
@@ -90,7 +96,11 @@ impl Triggers {
         });
         let mut watcher = match watcher {
             Ok(watcher) => watcher,
-            Err(e) => return vec![e.into()],
+            Err(e) => {
+                *current = None;
+                let _ = self.input.send(Input::Watch(files));
+                return vec![e.into()];
+            }
         };
         let roots: BTreeSet<&PathBuf> = files.iter().map(|f| &f.root).filter(|root| root.exists()).collect();
         let errors = roots
@@ -103,6 +113,7 @@ impl Triggers {
             })
             .collect();
         *current = Some(watcher);
+        let _ = self.input.send(Input::Watch(files));
         errors
     }
 
@@ -128,24 +139,29 @@ fn deliver(inputs: &Receiver<Input>, tx: &Sender<Message>) {
         let mut occurrences = Vec::new();
         match input {
             Ok(Input::Watch(watched)) => {
-                files = watched;
+                let before = std::mem::replace(&mut files, watched);
                 let previous = std::mem::take(&mut offsets);
+                // A file a line rule already watched that appeared since is read from its start.
+                let watched_before = |path: &Path| before.iter().any(|f| f.line_contains.is_some() && f.matches(path));
                 offsets = files
                     .iter()
                     .filter(|f| f.line_contains.is_some())
                     .flat_map(FileWatch::existing)
                     .filter_map(|path| {
                         let len = path.metadata().ok()?.len();
-                        let offset = previous.get(&path).copied().filter(|&offset| offset <= len).unwrap_or(len);
+                        let offset = match previous.get(&path) {
+                            Some(&offset) if offset <= len => offset,
+                            None if watched_before(&path) => 0,
+                            _ => len,
+                        };
                         Some((path, offset))
                     })
                     .collect();
                 changed.retain(|path, _| files.iter().any(|f| f.matches(path)));
+                mark_behind(&files, &offsets, &mut changed);
             }
-            Ok(Input::Changed(path)) => {
-                let now = Instant::now();
-                changed.entry(path).and_modify(|(_, latest)| *latest = now).or_insert((now, now));
-            }
+            Ok(Input::Changed(path)) => mark_changed(&mut changed, path),
+            Ok(Input::Rescan) => mark_behind(&files, &offsets, &mut changed),
             Ok(Input::System(SystemEvent::Offline, debounce)) => {
                 if online && offline_at.is_none() {
                     offline_at = Some(Instant::now() + debounce);
@@ -191,6 +207,28 @@ fn deliver(inputs: &Receiver<Input>, tx: &Sender<Message>) {
     }
 }
 
+fn mark_changed(changed: &mut HashMap<PathBuf, (Instant, Instant)>, path: PathBuf) {
+    let now = Instant::now();
+    changed.entry(path).and_modify(|(_, latest)| *latest = now).or_insert((now, now));
+}
+
+/// Marks as changed the files line rules watch that hold more than was read, whose change events may have been lost.
+fn mark_behind(
+    files: &[FileWatch],
+    offsets: &HashMap<PathBuf, u64>,
+    changed: &mut HashMap<PathBuf, (Instant, Instant)>,
+) {
+    let behind: Vec<PathBuf> = files
+        .iter()
+        .filter(|f| f.line_contains.is_some())
+        .flat_map(FileWatch::existing)
+        .filter(|path| path.metadata().is_ok_and(|m| m.len() > offsets.get(path).copied().unwrap_or(0)))
+        .collect();
+    for path in behind {
+        mark_changed(changed, path);
+    }
+}
+
 /// When a changed file fires: once quiet, or at most `MAX_WAIT` after its first change if only lines are read from it,
 /// since a rule on the whole file must not see it half-written.
 fn due(files: &[FileWatch], path: &Path, (first, latest): (Instant, Instant)) -> Instant {
@@ -224,4 +262,46 @@ fn appended_lines(path: &Path, from: u64, needles: &[&str]) -> io::Result<(u64, 
         })
         .collect();
     Ok((at, lines))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::Write;
+
+    fn lines_after(input: &Sender<Input>, output: &Receiver<Message>, send: Input) -> Vec<String> {
+        input.send(send).unwrap();
+        match output.recv_timeout(Duration::from_secs(3)) {
+            Ok(Message::Triggered(Occurrence::File { lines, .. })) => lines.into_iter().map(|(_, line)| line).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn lines_whose_change_event_was_lost_are_read_on_reload_and_rescan() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let log = root.join("a.jsonl");
+        fs::write(&log, "before\n").unwrap();
+        let watch = FileWatch {
+            pattern: glob::Pattern::new(&root.join("*.jsonl").to_string_lossy()).unwrap(),
+            root: root.clone(),
+            line_contains: Some("x".into()),
+        };
+        let (input, inputs) = channel();
+        let (tx, output) = channel();
+        thread::spawn(move || deliver(&inputs, &tx));
+        input.send(Input::Watch(vec![watch.clone()])).unwrap();
+        thread::sleep(Duration::from_millis(100));
+        let append =
+            |text: &str| fs::OpenOptions::new().append(true).open(&log).unwrap().write_all(text.as_bytes()).unwrap();
+
+        append("x reload\n");
+        assert_eq!(lines_after(&input, &output, Input::Watch(vec![watch.clone()])), ["x reload"]);
+        append("x rescan\n");
+        assert_eq!(lines_after(&input, &output, Input::Rescan), ["x rescan"]);
+        fs::write(root.join("b.jsonl"), "x new\n").unwrap();
+        assert_eq!(lines_after(&input, &output, Input::Watch(vec![watch])), ["x new"]);
+    }
 }

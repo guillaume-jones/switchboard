@@ -9,6 +9,8 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 
+#[cfg(target_os = "macos")]
+mod notifications;
 mod push;
 mod remote;
 #[cfg_attr(target_os = "macos", path = "system_events/macos.rs")]
@@ -147,12 +149,19 @@ impl switchboard_core::Emitter for Forward {
                 count(&self.0, &payload["rows"])
             }
             "notify" => {
-                let n = self.0.notification().builder();
-                let _ = n
-                    .title(payload["title"].as_str().unwrap_or_default())
-                    .body(payload["body"].as_str().unwrap_or_default())
-                    .show();
-                if settings(&self.0).is_some_and(|s| push::wanted(&s)) {
+                let (title, body) =
+                    (payload["title"].as_str().unwrap_or_default(), payload["body"].as_str().unwrap_or_default());
+                let settings = settings(&self.0);
+                let focused = self.0.get_webview_window("main").is_some_and(|w| w.is_focused().unwrap_or(false));
+                #[cfg(target_os = "macos")]
+                let shown =
+                    focused || notifications::show(title, body, settings.as_ref().map_or("", |s| s.sound.as_str()));
+                #[cfg(not(target_os = "macos"))]
+                let shown = focused;
+                if !shown {
+                    let _ = self.0.notification().builder().title(title).body(body).show();
+                }
+                if settings.is_some_and(|s| push::wanted(&s)) {
                     let app = self.0.clone();
                     let message = json!({ "title": payload["title"], "body": payload["body"] });
                     tauri::async_runtime::spawn(async move {
@@ -322,6 +331,11 @@ fn main() {
                     }
                     std::thread::sleep(IDLE_POLL);
                 }
+            });
+            #[cfg(target_os = "macos")]
+            notifications::init({
+                let handle = handle.clone();
+                move || forward(&handle)
             });
             let _ = app.notification().on_action(move |_| forward(&handle));
             Ok(())

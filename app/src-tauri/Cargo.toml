@@ -26,10 +26,23 @@ block2 = "0.6"
 core-foundation = "0.9"
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace"] }
 objc2-foundation = { version = "0.3", features = [
+  "NSBundle",
+  "NSError",
   "NSDistributedNotificationCenter",
   "NSNotification",
   "NSOperation",
   "NSString",
+  "block2",
+] }
+objc2 = "0.6"
+objc2-user-notifications = { version = "0.3", features = [
+  "UNNotification",
+  "UNNotificationContent",
+  "UNNotificationRequest",
+  "UNNotificationResponse",
+  "UNNotificationSound",
+  "UNNotificationTrigger",
+  "UNUserNotificationCenter",
   "block2",
 ] }
 system-configuration = "0.7"

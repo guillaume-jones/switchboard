@@ -105,6 +105,7 @@ Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started i
 | `reconnect_timeout` | `10` | how long another device shows as reconnecting after losing the desktop, before it shows as offline |
 | `connect_timeout` | `3` | how long another device waits for the desktop before answering from its cache and opening the stream again |
 | `push` | `"idle"` | when `core.notify` is also pushed to other devices' installed apps: `"off"`, `"locked"` (screen locked), `"idle"` (locked or idle) or `"always"` |
+| `sound` | `""` | file name of the sound `core.notify` plays, from `~/Library/Sounds` or `/System/Library/Sounds` (e.g. `"Glass.aiff"`); `""` is the system default |
 | `idle_after` | `120` | no input for this long, with nothing keeping the display awake, is `idle` |
 
 ## Cards
@@ -151,7 +152,7 @@ The same cards run on a phone, served by the desktop (see `remote`). `Root` sets
 
 ## Built-ins
 
-- Commands: `core.snapshot {source?}`, `core.restore {source, snapshot?}` (snapshots current data first), `core.notify {title, body}` (a macOS notification, also pushed to other devices per the `push` setting).
+- Commands: `core.snapshot {source?}`, `core.restore {source, snapshot?}` (snapshots current data first), `core.notify {title, body}` (a desktop notification, skipped while the Switchboard window has focus, also pushed to other devices per the `push` setting).
 - Writers: `core.rule_enable {rule}`, `core.run_finish {id, state, summary}`.
 - Views: `core_runs`, `core_firings`, `core_rules`, `core_items` (rules as `core:<rule>`), `core_events` (`kind`: `write`, `error`, `slow_read`). Core views expose every row and never filter; filter on top in your own views or with equality filters.
 - Queries: `core.timeline {limit}` (runs, firings and events, newest first), `core.events {kind, limit}` (newest events of a kind), `core.runs {limit}` (newest runs).

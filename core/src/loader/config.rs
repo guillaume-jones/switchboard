@@ -40,6 +40,9 @@ pub struct Settings {
     pub connect_timeout: Duration,
     /// When `core.notify` is also pushed to other devices: `off`, `locked`, `idle` or `always`.
     pub push: String,
+    /// The file name of the sound `core.notify` plays on the desktop, from `~/Library/Sounds` or `/System/Library/Sounds`;
+    /// empty for the system default.
+    pub sound: String,
     /// How long without keyboard or pointer input, and without an app keeping the display awake, before `idle`.
     pub idle_after: Duration,
 }
@@ -137,6 +140,7 @@ impl Settings {
             reconnect_timeout,
             connect_timeout,
             push: text("push", "idle"),
+            sound: text("sound", ""),
             idle_after,
         };
         if !PUSH_MODES.contains(&settings.push.as_str()) {

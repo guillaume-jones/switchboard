@@ -1,8 +1,12 @@
 # Switchboard
 
+
 An app to ingest any local data, serve personalized UI, and trigger any shell command.
 
 Everything it shows and does lives in `~/.switchboard`, which can be re-written by agents at any time and hot reloads.
+
+![Switchboard's main board: a sidebar of projects, chats and terminals next to to-dos and pull requests](docs/screenshot.png)
+
 
 ## Install
 
@@ -15,10 +19,17 @@ Requires git.
 - **Linux**: [Switchboard.deb](https://github.com/guillaume-jones/switchboard/releases/latest/download/Switchboard.deb) or [Switchboard.rpm](https://github.com/guillaume-jones/switchboard/releases/latest/download/Switchboard.rpm)
   - `sudo apt install ./Switchboard.deb`  or  `sudo dnf install ./Switchboard.rpm`
 
-Other notes:
-- On first start the app creates `~/.switchboard` from [`template/`](template) as a git repo. This is the repo your agents can freely edit to add data or UI. To start from another template instead, quit the app and run `swb init <git url>` to keep pulling its updates, or `swb init <git url> --copy` for a repo of your own; `swb init` alone restores the built-in one.
-- The default template assumes Claude Code, but can be replaced by any agent harness. Its terminals need `tmux`.
-- To track every agent session, not just those launched from Switchboard, merge the `hooks` from `~/.switchboard/sources/sessions/files/claude-hooks.json` into your agent config.
+
+### Template
+
+
+On first start the app creates `~/.switchboard` from the default [`template/`](template) as a git repo. This is the repo your agents can freely edit to add data or UI. 
+
+The default template include session support, terminals and projects. It uses the Claude harness, but this can be swapped out freely. To track every agent session, not just those launched from Switchboard, merge the `hooks` from `~/.switchboard/sources/sessions/files/claude-hooks.json` into your agent config.
+
+
+To start from another template instead, quit the app and run `swb init <git url>` to keep pulling its updates, or `swb init <git url> --copy` for a repo of your own; `swb init` alone restores the built-in one.
+
 
 
 ### Use from your phone
@@ -36,7 +47,7 @@ The app can serve a mobile web app over Tailscale, with notifications & offline 
 
 Requires Rust & Node 24.
 
-Linux also requires [Tauri's system dependencies](https://v2.tauri.app/start/prerequisites/#linux), plus `zsh`, `dash` and `jq` for the template.
+Linux also requires [Tauri's system dependencies](https://v2.tauri.app/start/prerequisites/#linux), plus `tmux`, `zsh`, `dash` and `jq` for the template.
 
 ```sh
 make install

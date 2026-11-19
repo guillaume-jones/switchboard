@@ -11,6 +11,7 @@ use tauri_plugin_notification::NotificationExt;
 
 #[cfg(target_os = "macos")]
 mod notifications;
+mod pty;
 mod push;
 mod remote;
 #[cfg_attr(target_os = "macos", path = "system_events/macos.rs")]
@@ -22,6 +23,7 @@ pub(crate) struct App {
     /// The window's subscriptions.
     subs: Mutex<HashSet<u64>>,
     remote: remote::Clients,
+    ptys: pty::Ptys,
     /// Set once the board is served to other devices.
     push: OnceLock<push::Push>,
     hotkey: Mutex<String>,
@@ -218,15 +220,17 @@ fn main() {
             engine: RwLock::new(Err("starting".into())),
             subs: Mutex::default(),
             remote: remote::Clients::default(),
+            ptys: pty::Ptys::default(),
             push: OnceLock::new(),
             hotkey: Mutex::default(),
             badge: Mutex::default(),
         })
-        .invoke_handler(tauri::generate_handler![call])
+        .invoke_handler(tauri::generate_handler![call, pty::pty_open, pty::pty_input, pty::pty_resize, pty::pty_close])
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Started {
                 let state = webview.state::<App>();
                 let ids: Vec<u64> = state.subs.lock().unwrap().drain().collect();
+                state.ptys.close_all();
                 if let Ok(engine) = &*state.engine.read().unwrap() {
                     ids.into_iter().for_each(|id| engine.unsubscribe(id));
                 }

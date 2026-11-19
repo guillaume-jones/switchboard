@@ -607,6 +607,7 @@ impl Batch<'_> {
                         path: path.clone(),
                         args,
                         timeout: (!long_running).then_some(timeout),
+                        pty: self.loaded.is_pty(&command),
                         into: PayloadWriter::of(rule),
                     };
                     match crate::runner::spawn(self.shared, job) {

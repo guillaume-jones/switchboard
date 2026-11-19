@@ -1,5 +1,0 @@
-#!/bin/sh
-# Run by ttyd for each connection with the URL's args: the token term.serve started it with, then the tmux session.
-[ -n "$SWB_TERM_TOKEN" ] && [ "$1" = "$SWB_TERM_TOKEN" ] || exit 1
-unset SWB_TERM_TOKEN
-exec tmux attach-session -t "=$2"

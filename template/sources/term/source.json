@@ -1,1 +1,1 @@
-{ "long_running": ["serve"] }
+{ "pty": ["attach"] }

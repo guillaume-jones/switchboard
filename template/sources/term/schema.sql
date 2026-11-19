@@ -6,9 +6,3 @@ CREATE TABLE sessions (
   attached INTEGER NOT NULL,
   created INTEGER NOT NULL
 );
-
--- The token files/attach requires as its first URL arg, new each term.serve start.
-CREATE TABLE token (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  value TEXT NOT NULL
-);

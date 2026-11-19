@@ -17,7 +17,7 @@ Requires git.
 
 Other notes:
 - On first start the app creates `~/.switchboard` from [`template/`](template) as a git repo. This is the repo your agents can freely edit to add data or UI. To start from another template instead, quit the app and run `swb init <git url>` to keep pulling its updates, or `swb init <git url> --copy` for a repo of your own; `swb init` alone restores the built-in one.
-- The default template assumes Claude Code, but can be replaced by any agent harness. Its terminals need `tmux` and `ttyd`.
+- The default template assumes Claude Code, but can be replaced by any agent harness. Its terminals need `tmux`.
 - To track every agent session, not just those launched from Switchboard, merge the `hooks` from `~/.switchboard/sources/sessions/files/claude-hooks.json` into your agent config.
 
 

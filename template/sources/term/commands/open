@@ -3,6 +3,7 @@
 # A `command` is pasted at its prompt without running it.
 name=$SWB_ARG_NAME cwd=${SWB_ARG_CWD:-$HOME} chat=$SWB_ARG_CHAT command=$SWB_ARG_COMMAND
 [[ $name =~ '^[A-Za-z0-9_-]+$' ]] || { print -r -- '{"outcome": "failure", "summary": "invalid name"}'; exit 1 }
+(( $+commands[tmux] )) || { print -r -- '{"outcome": "failure", "summary": "tmux is not installed: brew install tmux, or your package manager on Linux"}'; exit 1 }
 if ! tmux has-session -t "=$name" 2>/dev/null; then
   env -u RUN_ID -u SWB -u SOURCE_DIR -u SWB_ARG_NAME -u SWB_ARG_CWD -u SWB_ARG_CHAT -u SWB_ARG_COMMAND tmux new-session -d -s "$name" -c "$cwd" || exit 1
   [[ -n $command ]] && for _ in {1..30}; do

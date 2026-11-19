@@ -181,6 +181,45 @@ fn run_start_input_and_stop_reach_a_long_running_command() {
 }
 
 #[test]
+fn pty_runs_serve_a_terminal_to_every_client() {
+    let h = home(&[
+        ("sources/prs/source.json", r#"{"pty": ["shell"]}"#),
+        (
+            "sources/prs/commands/shell",
+            "#!/bin/sh\nstty -echo\necho ready \"$SWB_ARG_NAME\"\nwhile read -r line; do echo \"got $line $(stty size)\"; done\n",
+        ),
+    ]);
+    let engine = Engine::open(h.path(), Quiet).unwrap();
+    let id = engine.run("prs.shell", json!({"name": "t1"}), switchboard_core::Origin::default()).unwrap();
+    let read_until = |pty: &mut switchboard_core::Pty, text: &str| {
+        let (mut seen, mut buf) = (String::new(), [0u8; 4096]);
+        while !seen.contains(text) {
+            let n = std::io::Read::read(pty, &mut buf).unwrap();
+            assert!(n > 0, "the terminal closed before {text:?}; got {seen:?}");
+            seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+        seen
+    };
+    let mut first = engine.pty(&id).unwrap();
+    read_until(&mut first, "ready t1");
+    first.resize(100, 30).unwrap();
+    first.input(b"hello\n").unwrap();
+    read_until(&mut first, "got hello 30 100");
+    let mut second = engine.pty(&id).unwrap();
+    read_until(&mut second, "got hello 30 100");
+    first.close();
+    second.input(b"again\n").unwrap();
+    read_until(&mut second, "got again");
+    engine.stop_run(&id).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while engine.query("core_runs", json!({"id": id, "state": "stopped"})).unwrap().as_array().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the run was not stopped");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(format!("{:#}", engine.pty(&id).err().unwrap()).contains("ended"));
+}
+
+#[test]
 fn write_never_reads_stdin_unless_the_writer_takes_a_payload() {
     let h = home(&[]);
     let engine = Engine::open(h.path(), Quiet).unwrap();

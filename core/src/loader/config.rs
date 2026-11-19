@@ -164,6 +164,9 @@ pub struct SourceConfig {
     /// Command names (without the source prefix) that run until they exit or are stopped: no timeout, stdin kept
     /// open for `swb run input`, and not counted against `max_concurrency`.
     pub long_running: BTreeSet<String>,
+    /// Command names (without the source prefix) that run on a pseudo-terminal cards attach to, and otherwise like
+    /// long-running ones.
+    pub pty: BTreeSet<String>,
 }
 
 impl SourceConfig {
@@ -198,14 +201,19 @@ impl SourceConfig {
                     config.snapshot_retention = positive_integer(value).map(Duration::from_secs);
                     config.snapshot_retention.is_some()
                 }
-                "long_running" => {
+                "long_running" | "pty" => {
                     let names = value.as_array().and_then(|names| {
                         names
                             .iter()
                             .map(|n| n.as_str().filter(|n| commands.contains_key(&format!("{source}.{n}"))))
                             .collect::<Option<Vec<_>>>()
                     });
-                    config.long_running = names.iter().flatten().map(|n| n.to_string()).collect();
+                    let names_set = names.iter().flatten().map(|n| n.to_string()).collect();
+                    if key == "pty" {
+                        config.pty = names_set
+                    } else {
+                        config.long_running = names_set
+                    }
                     names.is_some()
                 }
                 "timeouts" | "queue_expiry" => {
@@ -233,7 +241,7 @@ impl SourceConfig {
                     diags.error(
                         &path,
                         format!(
-                            "unknown field {key} (expected item_card, snapshot_interval, snapshot_retention, timeouts, queue_expiry, long_running)"
+                            "unknown field {key} (expected item_card, snapshot_interval, snapshot_retention, timeouts, queue_expiry, long_running, pty)"
                         ),
                     );
                     continue;
@@ -244,7 +252,7 @@ impl SourceConfig {
                     "item_card" => "the name of a card in cards/",
                     "timeouts" => "an object mapping this source's command names to seconds",
                     "queue_expiry" => "an object mapping this source's command names to seconds (0 for never)",
-                    "long_running" => "an array of this source's command names",
+                    "long_running" | "pty" => "an array of this source's command names",
                     _ => "a positive number of seconds",
                 };
                 diags.error(&path, format!("{key} must be {expected}"));

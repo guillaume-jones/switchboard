@@ -5,6 +5,7 @@ use crate::push::Push;
 use crate::{App, Reply, dispatch, with};
 use axum::Router;
 use axum::body::Body;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{self, Next};
@@ -193,6 +194,7 @@ async fn serve(app: AppHandle, port: u16) -> Result<(), String> {
     let _ = app.state::<App>().push.set(Push::open(format!("https://{}:{port}", tailnet.host))?);
     let router = Router::new()
         .route("/api/events", get(events))
+        .route("/api/pty/{run}", get(pty))
         .route("/api/{command}", post(call))
         .fallback(get(asset))
         .layer(middleware::from_fn_with_state(tailnet, authorize))
@@ -242,6 +244,62 @@ async fn call(State(app): State<AppHandle>, Path(command): Path<String>, headers
         Ok(value) => axum::Json(value).into_response(),
         Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, axum::Json(json!({ "error": error }))).into_response(),
     }
+}
+
+/// A `pty` run's terminal over a websocket: binary messages of output; text messages of JSON, `{"input": text}` or
+/// `{"resize": [cols, rows]}`. Closes when either side does.
+async fn pty(State(app): State<AppHandle>, Path(run): Path<String>, upgrade: WebSocketUpgrade) -> Response {
+    let connected = tauri::async_runtime::spawn_blocking(move || crate::pty::connect(&app.state::<App>(), &run)).await;
+    let pty = match connected {
+        Ok(Ok(pty)) => pty,
+        Ok(Err(error)) => {
+            return (StatusCode::UNPROCESSABLE_ENTITY, axum::Json(json!({ "error": error }))).into_response();
+        }
+        Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    };
+    upgrade.on_upgrade(move |socket| relay(socket, pty))
+}
+
+async fn relay(mut socket: WebSocket, mut pty: switchboard_core::Pty) {
+    let Ok(mut reader) = pty.try_clone() else { return };
+    let (output, mut received) = unbounded_channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 16 << 10];
+        while let Ok(n @ 1..) = std::io::Read::read(&mut reader, &mut buf) {
+            if output.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    loop {
+        tokio::select! {
+            chunk = received.recv() => {
+                let Some(chunk) = chunk else { break };
+                if socket.send(Message::Binary(chunk.into())).await.is_err() {
+                    break;
+                }
+            }
+            message = socket.recv() => match message {
+                Some(Ok(Message::Text(text))) => {
+                    let message: Value = serde_json::from_str(&text).unwrap_or_default();
+                    let sent = match (&message["input"], &message["resize"]) {
+                        (Value::String(input), _) => pty.input(input.as_bytes()),
+                        (_, Value::Array(size)) => {
+                            let dim = |i: usize| size.get(i).and_then(Value::as_u64).unwrap_or(0) as u16;
+                            pty.resize(dim(0), dim(1))
+                        }
+                        _ => Ok(()),
+                    };
+                    if sent.is_err() {
+                        break;
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                Some(Ok(_)) => {}
+            },
+        }
+    }
+    pty.close();
 }
 
 /// Drops the client and its subscriptions when the stream closes.

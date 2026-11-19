@@ -81,10 +81,11 @@ Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started i
 - Timeout: rule `timeout`, else `source.json` `timeouts.<command>`, else the setting; the process group is killed. Stdout goes to `data/runs/<run_id>/out` (16 MB cap, which is also the `into` payload limit), stderr to `err` (1 MB cap).
 - Commands keep running when the app quits; the next start picks their runs back up.
 - Long-running (`source.json` `long_running`): no timeout, not counted against `max_concurrency`, stdin stays open after the args line, and each `swb run input $RUN_ID <text>` arrives as one more line. It runs until it exits or `swb run stop`; for a session or a connection kept warm across inputs, it should exit by itself once idle. Report progress with `swb write`, which is spooled while the app is closed.
+- Terminal (`source.json` `pty`): like long-running, but on a pseudo-terminal (`TERM=xterm-256color`) instead of stdin and stdout, which cards attach to with `pty` from the desktop or another device. It is hung up (SIGHUP, run `stopped`) once nothing has been attached for 30 s.
 
 ## `source.json` and `settings.json`
 
-`source.json`: `item_card` (card for this source's refs, gets `ref` and `size`), `snapshot_interval`, `snapshot_retention` (seconds), `timeouts` (`{ "<command>": seconds }`), `queue_expiry` (`{ "<command>": seconds }`: how long a run queued offline on another device may wait; `0` refuses to queue it, for commands that only make sense right away), `long_running` (`["<command>"]`).
+`source.json`: `item_card` (card for this source's refs, gets `ref` and `size`), `snapshot_interval`, `snapshot_retention` (seconds), `timeouts` (`{ "<command>": seconds }`), `queue_expiry` (`{ "<command>": seconds }`: how long a run queued offline on another device may wait; `0` refuses to queue it, for commands that only make sense right away), `long_running` (`["<command>"]`), `pty` (`["<command>"]`).
 
 `settings.json` (numbers are positive integers, seconds unless noted):
 
@@ -115,12 +116,13 @@ Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started i
 `cards/<Name>.tsx` default-exports a React component. Imports allowed: `react`, `react/jsx-runtime`, `switchboard`, and relative paths into `cards/lib/` (tried as written, then `.ts`, `.tsx`, `.js`; no `index`). Cards never import each other; no npm packages, dynamic `import()` or `import.meta`. A dependency-free single-file ESM build of a library can be vendored into `cards/lib/` with its `.d.ts`, like `lib/marked.js`. Each card gets its own instance of its helpers. Render agent or remote text with `renderMarkdown` from `lib/markdown`, never as raw HTML: card HTML runs in the webview, which can start commands.
 
 ```ts
-import { useQuery, mutate, run, useExpose, useCards, useConnection, CardSlot, Item, type CardProps } from "switchboard"
+import { useQuery, mutate, run, pty, useExpose, useCards, useConnection, CardSlot, Item, type CardProps } from "switchboard"
 
 useQuery("prs_items", { id })        // live rows; undefined until loaded; throws on error
 useQuery("prs.search", { text })     // query
 mutate("prs.dismiss", { ref })       // resolves to changed row count
 run("prs.fix-ci", { pr })            // resolves to run id
+pty(runId, { data, close, open })   // attach to a `pty` run: { write, resize, close }
 useExpose({ selected: "prs:4812" })  // context variables for key bindings
 useCards()                           // names of every card, e.g. for a picker
 useConnection()                      // { state: "online" | "reconnecting" | "offline", asOf } on another device

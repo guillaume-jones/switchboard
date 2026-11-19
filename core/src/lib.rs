@@ -1,6 +1,7 @@
 mod engine;
 mod loader;
 mod maintenance;
+mod pty;
 mod runner;
 mod socket;
 
@@ -10,6 +11,7 @@ pub use loader::{
     Source, SourceConfig, Statement, SystemEvent, Trigger, Watch, Writer, load,
 };
 pub use maintenance::{Template, init};
+pub use pty::Pty;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};

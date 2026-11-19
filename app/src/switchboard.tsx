@@ -33,6 +33,8 @@ export const mutate = (name: string, params: Params = {}) => bridge.mutate(name,
 
 export const run = (name: string, args: Params = {}) => bridge.run(name, args).then(r => r.run_id)
 
+export const pty = bridge.pty
+
 export const useCards = () => useLoadedConfig().cards
 
 export function useConnection() {

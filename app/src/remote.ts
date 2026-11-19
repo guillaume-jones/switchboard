@@ -3,7 +3,7 @@
 // contact, and a new stream catches up in one `resync`: the desktop answers with only what changed, applied together.
 // Writes and runs made offline wait in an outbox until the desktop is reachable again.
 import { useSyncExternalStore } from 'react'
-import type { Backend, CardModules, Commands, Config, Events, Params, Row } from './bridge'
+import type { Backend, CardModules, Commands, Config, Events, Params, PtyHandle, PtyHandlers, Row } from './bridge'
 
 export type Queued = {
   id: string
@@ -554,6 +554,35 @@ const handlers: { [C in keyof Commands]: (args: Commands[C]['args']) => Promise<
   report_error: args => post('report_error', args).catch(() => null),
 }
 
+/** A terminal over a websocket on the same origin: output as binary messages, input and resizes as JSON text. */
+function pty(run: string, on: PtyHandlers): PtyHandle {
+  const url = new URL(`/api/pty/${encodeURIComponent(run)}`, location.href)
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  const socket = new WebSocket(url)
+  socket.binaryType = 'arraybuffer'
+  let opened = false
+  let closed = false
+  socket.onopen = () => {
+    opened = true
+    on.open?.()
+  }
+  socket.onmessage = e => on.data(new Uint8Array(e.data as ArrayBuffer))
+  socket.onclose = () => {
+    if (closed) return
+    closed = true
+    on.close(opened ? undefined : new Error(`cannot attach to run ${run}`))
+  }
+  const send = (message: object) => socket.readyState === WebSocket.OPEN && socket.send(JSON.stringify(message))
+  return {
+    write: input => send({ input }),
+    resize: (cols, rows) => send({ resize: [cols, rows] }),
+    close: () => {
+      closed = true
+      socket.close()
+    },
+  }
+}
+
 export function connect(): Backend {
   setConnection('reconnecting')
   loadOutbox()
@@ -577,5 +606,6 @@ export function connect(): Backend {
       if (!listeners.has(event)) listeners.set(event, new Set())
       listeners.get(event)!.add(handler)
     },
+    pty,
   }
 }

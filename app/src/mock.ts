@@ -88,9 +88,7 @@ const db = {
 
 const hiddenSessions = new Set<string>()
 let errorsClearedThrough = 0
-const defaultTiles: Tile[] = [
-  { grid: 'main', id: 'todo', component: 'Todo', props: '{}', x: 0, y: 0, w: 24, h: 14 },
-]
+const defaultTiles: Tile[] = [{ grid: 'main', id: 'todo', component: 'Todo', props: '{}', x: 0, y: 0, w: 24, h: 14 }]
 
 const VIEWS: Record<string, () => Row[]> = {
   prs_items: () => db.prs.filter(pr => !pr.dismissed).map(({ id, title, ci }) => ({ id, title, ci })),
@@ -324,6 +322,10 @@ const mock: Backend = {
   invoke: async (command, args) => handlers[command](args),
   listen: (event, handler) => {
     listeners[event].push(handler)
+  },
+  pty: (run, on) => {
+    queueMicrotask(() => on.close(new Error(`mock: no terminal for run ${run}`)))
+    return { write: () => {}, resize: () => {}, close: () => {} }
   },
 }
 

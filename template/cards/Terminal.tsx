@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { run, useQuery, type CardProps } from 'switchboard'
+import { pty, run, useQuery, type CardProps } from 'switchboard'
 import { useMobile } from './lib/theme'
 import { Terminal as XTerm } from './lib/xterm'
 import { FitAddon } from './lib/xterm-fit'
@@ -42,15 +42,13 @@ const KEYS: [string, string | ((term: XTerm) => string)][] = [
 ]
 
 /**
- * A tmux session, through term.serve's ttyd: on the desktop at 127.0.0.1:7681, elsewhere through the tailnet at :7682,
- * passing the token in `term_token` as the first URL arg, which files/attach requires. Sized to the visible viewport so an on-screen keyboard shrinks it instead
- * of covering the prompt. A vertical swipe scrolls one line per row the finger moves, as one-line wheel events that
+ * A tmux session, through a `term.attach` run's terminal (`pty`), reused across remounts through `localStorage` until
+ * it ends. Sized to the visible viewport so an on-screen keyboard shrinks it instead of covering the prompt. A vertical swipe scrolls one line per row the finger moves, as one-line wheel events that
  * xterm.js passes on to tmux (mouse mode, one line per event, set by term.list), and a flick keeps scrolling. Trackpad and mouse wheel pixels go through the same conversion. Shift+Enter
  * sends Esc + Return, which Claude reads as a new line. On a phone, a key bar sends the keys its keyboard lacks.
  */
-export default function Terminal({ name }: CardProps<{ name: string }>) {
+export default function Terminal({ name, slot }: CardProps<{ name: string }>) {
   const live = useQuery('term_items', { name })
-  const token = useQuery<{ token: string }>('term_token')?.[0]?.token
   const mobile = useMobile()
   const box = useRef<HTMLDivElement>(null)
   const screen = useRef<HTMLDivElement>(null)
@@ -75,7 +73,7 @@ export default function Terminal({ name }: CardProps<{ name: string }>) {
 
   useEffect(() => {
     const element = screen.current
-    if (!running || !token || !element) return
+    if (!running || !element) return
     const term = new XTerm({
       fontFamily: 'Monaco, Menlo, monospace',
       fontSize: 13,
@@ -90,51 +88,58 @@ export default function Terminal({ name }: CardProps<{ name: string }>) {
     const observer = new ResizeObserver(() => fit.fit())
     observer.observe(element)
 
-    // ttyd: the first message is {AuthToken, columns, rows}, then '0' + input or '1' + {columns, rows}; it sends '0' + output.
-    const encoder = new TextEncoder()
-    const base = location.hostname.endsWith('.ts.net') ? `wss://${location.hostname}:7682` : 'ws://127.0.0.1:7681'
-    let socket: WebSocket | undefined
+    const key = `Terminal.run:${slot ?? ''}:${name}`
+    let connection: ReturnType<typeof pty> | undefined
+    let connecting = false
     let failures = 0
     let retry = 0
     let disposed = false
-    const send = (type: string, text: string) => {
-      if (socket?.readyState === WebSocket.OPEN) socket.send(encoder.encode(type + text))
+    const send = (data: string) => connection?.write(data)
+    const reconnect = (delay: number) => {
+      if (!disposed && !document.hidden) retry = window.setTimeout(connect, delay)
     }
-    const connect = () => {
-      if (disposed || (socket && socket.readyState <= WebSocket.OPEN)) return
-      const ws = new WebSocket(`${base}/ws?arg=${token}&arg=${encodeURIComponent(name)}`, ['tty'])
-      socket = ws
-      ws.binaryType = 'arraybuffer'
-      ws.onopen = () => {
-        failures = 0
-        term.reset()
-        ws.send(encoder.encode(JSON.stringify({ AuthToken: '', columns: term.cols, rows: term.rows })))
-        setConnected(true)
-      }
-      ws.onmessage = e => {
-        const data = new Uint8Array(e.data as ArrayBuffer)
-        if (data[0] === 48) term.write(data.subarray(1))
-      }
-      ws.onclose = () => {
+    const connect = async () => {
+      if (disposed || connection || connecting) return
+      connecting = true
+      try {
+        const stored = localStorage.getItem(key)
+        const id = stored ?? (await run('term.attach', { name }))
+        localStorage.setItem(key, id)
         if (disposed) return
-        setConnected(false)
-        if (!document.hidden) retry = window.setTimeout(connect, Math.min(1000 * ++failures, 10000))
+        term.reset()
+        connection = pty(id, {
+          open: () => {
+            failures = 0
+            setConnected(true)
+            connection?.resize(term.cols, term.rows)
+          },
+          data: bytes => term.write(bytes),
+          close: error => {
+            connection = undefined
+            if (error) localStorage.removeItem(key)
+            if (disposed) return
+            setConnected(false)
+            reconnect(error && stored ? 0 : Math.min(1000 * ++failures, 10000))
+          },
+        })
+      } catch {
+        reconnect(Math.min(1000 * ++failures, 10000))
+      } finally {
+        connecting = false
       }
     }
-    const onVisible = () => document.hidden || connect()
+    const onVisible = () => document.hidden || void connect()
     document.addEventListener('visibilitychange', onVisible)
-    connect()
+    void connect()
 
     const subscriptions = [
-      term.onData(data => send('0', data)),
-      term.onBinary(data => {
-        if (socket?.readyState === WebSocket.OPEN) socket.send(Uint8Array.from('0' + data, c => c.charCodeAt(0)))
-      }),
-      term.onResize(({ cols, rows }) => send('1', JSON.stringify({ columns: cols, rows }))),
+      term.onData(send),
+      term.onBinary(send),
+      term.onResize(({ cols, rows }) => connection?.resize(cols, rows)),
     ]
     term.attachCustomKeyEventHandler(e => {
       if (e.key !== 'Enter' || !e.shiftKey) return true
-      if (e.type === 'keydown') send('0', '\x1b\r')
+      if (e.type === 'keydown') send('\x1b\r')
       return false
     })
 
@@ -203,14 +208,14 @@ export default function Terminal({ name }: CardProps<{ name: string }>) {
     element.addEventListener('touchmove', onTouchMove, { passive: false })
     element.addEventListener('touchend', onTouchEnd)
 
-    session.current = { term, input: data => send('0', data) }
+    session.current = { term, input: send }
     if (!matchMedia('(pointer: coarse)').matches) term.focus()
     return () => {
       disposed = true
       session.current = null
       clearTimeout(retry)
       cancelAnimationFrame(glide)
-      socket?.close()
+      connection?.close()
       document.removeEventListener('visibilitychange', onVisible)
       element.removeEventListener('touchstart', onTouchStart)
       element.removeEventListener('touchmove', onTouchMove)
@@ -219,7 +224,7 @@ export default function Terminal({ name }: CardProps<{ name: string }>) {
       subscriptions.forEach(s => s.dispose())
       term.dispose()
     }
-  }, [running, token, name])
+  }, [running, name, slot])
 
   if (!live) return null
   if (!running)

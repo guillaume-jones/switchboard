@@ -1,0 +1,3 @@
+#!/bin/sh
+# term.attach {name}: attaches to the tmux session `name`, on the pseudo-terminal the Terminal card shows.
+exec tmux attach-session -t "=$SWB_ARG_NAME"

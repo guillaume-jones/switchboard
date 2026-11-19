@@ -14,6 +14,15 @@ declare module 'switchboard' {
   /** Starts a command (`prs.fix-ci`); resolves to the run id, rejects with an Error. */
   export function run(name: string, args?: Params): Promise<string>
   /**
+   * Attaches to the terminal of a run of a `pty` command, from the desktop or another device. `data` gets its output,
+   * starting with recent output; `close` is called once, with an error if it never opened. The run is hung up once no
+   * card has been attached for 30 s.
+   */
+  export function pty(
+    run: string,
+    on: { open?: () => void; data: (bytes: Uint8Array) => void; close: (error?: Error) => void },
+  ): { write: (text: string) => void; resize: (cols: number, rows: number) => void; close: () => void }
+  /**
    * The desktop's reachability from another device; always `online` on the desktop. Reconnecting and offline, the board
    * shows the last data seen, as of `asOf` (ms since epoch), and queues writes and runs.
    */

@@ -107,10 +107,16 @@ pub struct Loaded {
 }
 
 impl Loaded {
-    /// Whether `source.command` is listed in its source's `long_running`.
+    /// Whether `source.command` is listed in its source's `long_running` or `pty`.
     pub fn is_long_running(&self, command: &str) -> bool {
         let (source, name) = command.split_once('.').unwrap_or((command, ""));
-        self.sources.get(source).is_some_and(|s| s.config.long_running.contains(name))
+        self.sources.get(source).is_some_and(|s| s.config.long_running.contains(name) || s.config.pty.contains(name))
+    }
+
+    /// Whether `source.command` is listed in its source's `pty`.
+    pub fn is_pty(&self, command: &str) -> bool {
+        let (source, name) = command.split_once('.').unwrap_or((command, ""));
+        self.sources.get(source).is_some_and(|s| s.config.pty.contains(name))
     }
 }
 

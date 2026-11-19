@@ -28,6 +28,8 @@ pub(crate) struct Job {
     pub args: Value,
     /// `None` for a long-running command, which also keeps its stdin open for `swb run input`.
     pub timeout: Option<Duration>,
+    /// Runs on a pseudo-terminal that `Pty::connect` reaches, instead of with stdin kept open.
+    pub pty: bool,
     pub into: Option<PayloadWriter>,
 }
 
@@ -103,7 +105,11 @@ pub(crate) fn spawn(shared: &Arc<Shared>, job: Job) -> Result<u32> {
     command
         .arg(&dir)
         .arg(job.timeout.map_or(0, |t| t.as_secs().max(1)).to_string())
-        .arg(if job.timeout.is_none() { "1" } else { "0" })
+        .arg(match (job.pty, job.timeout) {
+            (true, _) => "pty",
+            (false, None) => "1",
+            (false, Some(_)) => "0",
+        })
         .arg(&job.path)
         .env_clear()
         .envs(env.iter().cloned())

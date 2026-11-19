@@ -526,6 +526,11 @@ impl Engine {
         self.shared.stop_run(run_id)
     }
 
+    /// Connects to a `pty` run's terminal, waiting briefly for a run that has not started yet.
+    pub fn pty(&self, run_id: &str) -> Result<crate::Pty> {
+        crate::Pty::connect(&self.shared.home, run_id)
+    }
+
     /// What the shell needs to render: the root card, the palette entries, key bindings and load errors.
     pub fn config(&self) -> Value {
         let loaded = self.shared.loaded();

@@ -1,8 +1,8 @@
 #!/bin/zsh
-# sessions.start {prompt, cwd?, model?, attachments?, disallowed?}: starts a Claude Code session held by Switchboard
-# (sessions.serve) in cwd (default this folder; a bare name means that folder under ~/Documents) on model (default
+# sessions.start {prompt, cwd?, model?, attachments?, disallowed?, origin?}: starts a Claude Code session held by Switchboard
+# (sessions.serve) in cwd (default this folder; ~ is home; a bare name means that folder under ~/Documents) on model (default
 # opus), and succeeds with "started <short id>" once Claude reports its session id. disallowed: space-separated tools
-# the session can never use.
+# the session can never use. origin: me, agent (default) or automation; only the user's own message box passes me.
 finish() {
   local s=${2//\\/\\\\}; s=${s//\"/\\\"}; s=${s//[[:cntrl:]]/ }
   print -r -- "{\"outcome\": \"$1\", \"summary\": \"$s\"}"
@@ -10,6 +10,7 @@ finish() {
 }
 prompt=$SWB_ARG_PROMPT
 cwd=${SWB_ARG_CWD:-$SWITCHBOARD_HOME}
+cwd=${cwd/#\~/$HOME}
 [[ $cwd != /* && -d $HOME/Documents/$cwd ]] && cwd=$HOME/Documents/$cwd
 [[ -d $cwd ]] || finish failure "no folder $cwd"
 if [[ -n $SWB_ARG_ATTACHMENTS ]]; then
@@ -17,12 +18,16 @@ if [[ -n $SWB_ARG_ATTACHMENTS ]]; then
 fi
 [[ -n $prompt ]] || finish failure "prompt is required"
 run=$("$SWB" run start sessions.serve prompt="$(print -r -- $prompt | jq -Rsc 'rtrimstr("\n")')" cwd="$(print -r -- ${cwd:A} | jq -Rr @json)" \
-  model=${SWB_ARG_MODEL:-opus} disallowed="$(print -r -- $SWB_ARG_DISALLOWED | jq -Rr @json)" 2>&1) || finish failure "$run"
+  model=${SWB_ARG_MODEL:-opus} disallowed="$(print -r -- $SWB_ARG_DISALLOWED | jq -Rr @json)" \
+  origin=${SWB_ARG_ORIGIN:-agent} 2>&1) || finish failure "$run"
 dir=$SWITCHBOARD_HOME/data/runs/$run
 zmodload zsh/zselect
 for i in {1..1100}; do
   session=$(jq -r 'select(.session) | .session' $dir/out 2>/dev/null | head -1)
-  [[ -n $session ]] && finish success "started ${session[1,8]}"
+  if [[ -n $session ]]; then
+    "$SWB" write sessions.model_set session=$session model=${SWB_ARG_MODEL:-opus} >/dev/null
+    finish success "started ${session[1,8]}"
+  fi
   if [[ -e $dir/exit ]]; then
     finish failure "$(tail -c 300 $dir/err 2>/dev/null || jq -r '.summary // empty' $dir/out 2>/dev/null | tail -1)"
   fi

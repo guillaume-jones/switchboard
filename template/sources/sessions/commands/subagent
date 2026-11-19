@@ -1,0 +1,4 @@
+#!/bin/zsh
+# sessions.subagent {path}: prints a subagent's .meta.json with its id and parent session, for sessions.subagent_meta.
+name=${SWB_ARG_PATH:t:r:r}
+jq -c --arg id ${name#agent-} --arg session ${SWB_ARG_PATH:h:h:t} '. + {id: $id, session: $session}' $SWB_ARG_PATH

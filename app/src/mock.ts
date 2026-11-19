@@ -89,7 +89,7 @@ const db = {
 const hiddenSessions = new Set<string>()
 let errorsClearedThrough = 0
 const defaultTiles: Tile[] = [
-  { grid: 'main', id: 'sessions', component: 'Sessions', props: '{}', x: 0, y: 0, w: 12, h: 26 },
+  { grid: 'main', id: 'todo', component: 'Todo', props: '{}', x: 0, y: 0, w: 24, h: 14 },
 ]
 
 const VIEWS: Record<string, () => Row[]> = {
@@ -127,7 +127,6 @@ const stepBoard = (step: 1 | -1) => {
 const findTile = (grid: string, id: string) => db.tiles.find(tile => tile.grid === grid && tile.id === id)
 
 const WRITERS: Record<string, (params: Args) => void> = {
-  'sessions.transcript_close': () => {},
   'sessions.hide': ({ id }) => void hiddenSessions.add(String(id)),
   'sessions.unhide': ({ id }) => void hiddenSessions.delete(String(id)),
   'prs.dismiss': ({ ref }) => {
@@ -241,7 +240,7 @@ function read(name: string, params: Params): Row[] {
   if (view) return view().filter(row => Object.entries(params).every(([column, value]) => row[column] == value))
   const query = QUERIES[name]
   if (query) return query(params)
-  throw new Error(`no view or query named ${name}`)
+  return []
 }
 
 function pushChangedRows() {

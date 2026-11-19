@@ -1,0 +1,14 @@
+DELETE FROM sessions.items WHERE id = :id;
+DELETE FROM sessions.agents WHERE session = :id;
+DELETE FROM sessions.transcripts WHERE session = :id;
+DELETE FROM sessions.messages WHERE session = :id;
+DELETE FROM sessions.subagents WHERE session = :id;
+DELETE FROM sessions.hidden WHERE session = :id;
+DELETE FROM sessions.titles WHERE session = :id;
+DELETE FROM sessions.folders WHERE session = :id;
+DELETE FROM sessions.seen WHERE session = :id;
+DELETE FROM sessions.watches WHERE session = :id;
+DELETE FROM sessions.models WHERE session = :id;
+DELETE FROM sessions.queue WHERE session = :id;
+DELETE FROM sessions.sending WHERE session = :id;
+DELETE FROM sessions.rewinds WHERE session = :id

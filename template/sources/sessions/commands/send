@@ -3,7 +3,8 @@
 # attachment's {{attachment:<id>}} in the text becomes its saved path, or an "Attached file:" line is appended.
 # A session Switchboard holds (sessions.serve) gets it at once, folded into the turn in progress if Claude is working;
 # one another app still runs (a terminal, Zed) gets it through sessions.poke. Any other session is resumed under
-# sessions.serve with it, in its folder (sessions.move), after stopping its old background process if it has one.
+# sessions.serve with it, in its folder (sessions.move) and on its model (sessions.model_set), after stopping its old
+# background process, or its held one if either changed or a message was edited (sessions.rewind), cut back to before it.
 finish() {
   local s=${2//\\/\\\\}; s=${s//\"/\\\"}; s=${s//[[:cntrl:]]/ }
   print -r -- "{\"outcome\": \"$1\", \"summary\": \"$s\"}"
@@ -17,13 +18,15 @@ fi
 # Local commands (/usage, /context...) run without a turn, so no hook reports them done.
 sent=sent
 [[ ${text%% *} == /(usage|cost|context|status|stats|compact|doctor|help|release-notes|mcp) ]] && sent="ran ${text%% *}"
-cwd=$("$SWB" query sessions_items id=$session | jq -r '.[0].cwd // empty')
-IFS=$'\t' read -r run served_cwd <<<"$("$SWB" query sessions_served session=$session | jq -r '.[0] // empty | [.run_id, .cwd // ""] | @tsv')"
-if [[ -n $run && ( -z $cwd || $served_cwd == $cwd ) ]]; then
+IFS=$'\t' read -r cwd model <<<"$("$SWB" query sessions_items id=$session | jq -r '.[0] // empty | [.cwd // "", .model // ""] | @tsv')"
+rewind=$("$SWB" query sessions_rewinds session=$session | jq -r '.[0].uuid // empty')
+IFS=$'\t' read -r run served_cwd served_model <<<"$("$SWB" query sessions_served session=$session | jq -r '.[0] // empty | [.run_id, .cwd // "", .model // ""] | @tsv')"
+if [[ -n $run && -z $rewind && ( -z $cwd || $served_cwd == $cwd ) && ( -z $model || $served_model == $model ) ]]; then
   out=$("$SWB" run input $run "$(jq -nc --arg t $text '{text: $t}')" 2>&1) && finish success $sent
 fi
 IFS=$'\t' read -r pid socket live <<<"$(jq -r --arg s $session 'select(.sessionId == $s) | [.pid // "", .messagingSocketPath // "", .kind // ""] | map(tostring) | @tsv' ~/.claude/sessions/*.json 2>/dev/null | head -1)"
 if [[ -n $pid && -z $run ]] && kill -0 $pid 2>/dev/null; then
+  [[ $live != bg && -n $rewind ]] && finish failure "cannot edit a message of a session open in another app"
   [[ $live != bg ]] && SWB_ARG_TEXT=$text SWB_ARG_ATTACHMENTS= exec "$SOURCE_DIR/commands/poke"
   claude stop ${session[1,8]} >/dev/null 2>&1
   for i in {1..500}; do kill -0 $pid 2>/dev/null || break; sleep 0.02; done
@@ -34,6 +37,7 @@ if [[ -n $run ]]; then
 fi
 cwd=${cwd:-$HOME}
 [[ -d $cwd ]] || finish failure "no folder $cwd"
+[[ -n $rewind ]] && { "$SWB" write sessions.rewind_clear session=$session >/dev/null || finish failure "cannot clear the edit" }
 out=$("$SWB" run start sessions.serve session=$session prompt="$(print -r -- $text | jq -Rsc 'rtrimstr("\n")')" \
-  cwd="$(print -r -- $cwd | jq -Rr @json)" 2>&1) || finish failure "$out"
+  cwd="$(print -r -- $cwd | jq -Rr @json)" ${model:+model=$model} ${rewind:+rewind=$rewind} 2>&1) || finish failure "$out"
 finish success ${${sent:#sent}:-resumed}

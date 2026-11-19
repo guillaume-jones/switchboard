@@ -1,0 +1,7 @@
+{
+  "id": "sessions-subagent-lines",
+  "when": { "files": "~/.claude/projects/*/*/subagents/*.jsonl", "line_contains": "\"agentId\"" },
+  "into": "sessions.subagent_line",
+  "args": { "payload": "[{line}]" },
+  "log": false
+}

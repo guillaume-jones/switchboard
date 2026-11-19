@@ -11,7 +11,7 @@ const TOP_EDGE: CSSProperties = {
   background: 'var(--bg)',
 }
 
-/** Boards, with Health floating over them; boards become a list on phones. */
+/** The `Boards` shell; boards become a list on phones. */
 export default function Root() {
   const mobile = useMobile()
   useLayoutEffect(() => void document.documentElement.toggleAttribute('data-mobile', mobile), [mobile])
@@ -29,13 +29,10 @@ export default function Root() {
   const connection = useConnection().state
   const boards = useMemo(() => ({ client: mobile ? 'mobile' : 'desktop' }), [mobile])
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', position: 'fixed', inset: 0 }}>
       <style>{THEME}</style>
       <div style={TOP_EDGE} />
       {connection !== 'online' && <div className={`connection ${connection}`} />}
-      <div className="chip health-anchor">
-        <CardSlot component="Health" id="health" />
-      </div>
       <main style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <CardSlot component="Boards" id="boards" props={boards} />
       </main>

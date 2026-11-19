@@ -150,7 +150,6 @@ fn sessions_track_claude_hooks_and_interrupts() {
         engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0]["status"].as_str().unwrap().to_string()
     };
     for (event, status) in [
-        (json!({"hook_event_name": "SessionStart", "source": "startup"}), "ready"),
         (json!({"hook_event_name": "UserPromptSubmit", "prompt": "fix the build"}), "working"),
         (json!({"hook_event_name": "SessionStart", "source": "compact"}), "working"),
         (json!({"hook_event_name": "PermissionRequest", "tool_name": "Bash"}), "needs_permission"),
@@ -250,7 +249,7 @@ fn sessions_held_by_serve_are_live_until_the_run_ends() {
     );
     assert_eq!(
         engine.query("sessions_served", json!({})).unwrap(),
-        json!([{"session": "s1", "run_id": "serve1", "cwd": null}])
+        json!([{"session": "s1", "run_id": "serve1", "cwd": null, "model": null}])
     );
     engine.finish_run("serve1", true, None).unwrap();
     let session = &engine.query("sessions_items", json!({"id": "s1"})).unwrap()[0];
@@ -273,7 +272,7 @@ fn transcripts_keep_messages_of_open_sessions_only() {
     sidechain["isSidechain"] = json!(true);
     let lines = json!([
         first,
-        line("2", "s1", "assistant", json!([{"type": "thinking", "thinking": "hm"}, {"type": "text", "text": "Hi"}, {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}])),
+        line("2", "s1", "assistant", json!([{"type": "text", "text": "Hi"}, {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}])),
         line("3", "s2", "user", json!("other session")),
         line("5", "s1", "user", json!([{"type": "image", "source": {"type": "base64", "data": "iVBOR"}}, {"type": "tool_result", "content": [{"type": "text", "text": "shot"}, {"type": "image", "source": {"type": "base64", "data": "iVBOR"}}]}])),
         sidechain,
@@ -284,6 +283,4 @@ fn transcripts_keep_messages_of_open_sessions_only() {
     let messages = engine.query("sessions.transcript", json!({"session": "s1", "limit": 10})).unwrap();
     let texts: Vec<&str> = messages.as_array().unwrap().iter().map(|m| m["text"].as_str().unwrap()).collect();
     assert_eq!(texts, ["hello", "Hi\n\n→ Bash {\"command\":\"ls\"}", "[image]\n\n← shot [image]"]);
-    engine.write("sessions.transcript_close", json!({"session": "s1"}), card()).unwrap();
-    assert_eq!(engine.query("sessions.transcript", json!({"session": "s1", "limit": 10})).unwrap(), json!([]));
 }

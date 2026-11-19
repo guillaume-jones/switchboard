@@ -1,0 +1,13 @@
+{
+  "printWidth": 120,
+  "semi": false,
+  "singleQuote": true,
+  "arrowParens": "avoid",
+  "ignorePatterns": [
+    "cards/lib/marked.*",
+    "cards/lib/octicons.*",
+    "cards/lib/xterm*",
+    "cards/switchboard.d.ts",
+    "data/"
+  ]
+}

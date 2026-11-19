@@ -24,3 +24,18 @@ CREATE TABLE tiles (
   list_h INTEGER, -- rows in the phone list layout; NULL sizes the tile by its content
   PRIMARY KEY (grid, id)
 );
+
+-- Visited places per client, newest at the highest seq: a board (`session` NULL) or that client's chat board showing `session` ('' for a new chat).
+CREATE TABLE history (
+  client TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  board TEXT NOT NULL,
+  session TEXT,
+  PRIMARY KEY (client, seq)
+);
+
+-- The history entry each client is on; back and forward move it.
+CREATE TABLE cursor (
+  client TEXT PRIMARY KEY,
+  seq INTEGER NOT NULL
+);

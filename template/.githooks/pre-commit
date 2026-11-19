@@ -1,0 +1,23 @@
+#!/bin/sh
+# Formats staged files with oxfmt (skipped without npx), then runs the app's own hook (.git/hooks/pre-commit, rewritten
+# on every start). A file that also has unstaged changes is only checked, so formatting never stages someone else's edits.
+set -e
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+if [ -n "$staged" ] && command -v npx >/dev/null; then
+  unstaged=$(git diff --name-only)
+  clean=$(printf '%s\n' "$staged" | grep -vxF "$unstaged" || true)
+  [ -z "$unstaged" ] && clean=$staged
+  mixed=$(printf '%s\n' "$staged" | grep -xF "$unstaged" || true)
+  [ -z "$unstaged" ] && mixed=
+  if [ -n "$clean" ]; then
+    printf '%s\n' "$clean" | tr '\n' '\0' | xargs -0 npx --yes oxfmt --no-error-on-unmatched-pattern >/dev/null
+    printf '%s\n' "$clean" | tr '\n' '\0' | xargs -0 git add
+  fi
+  if [ -n "$mixed" ]; then
+    printf '%s\n' "$mixed" | tr '\n' '\0' | xargs -0 npx --yes oxfmt --check --no-error-on-unmatched-pattern >/dev/null || {
+      echo 'oxfmt: format these files (they have unstaged changes, so the hook did not touch them)' >&2
+      exit 1
+    }
+  fi
+fi
+exec "$(git rev-parse --git-dir)/hooks/pre-commit"

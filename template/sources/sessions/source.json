@@ -1,1 +1,5 @@
-{ "timeouts": { "start": 120, "send": 120, "poke": 30, "flush": 180 }, "queue_expiry": { "reveal": 0 }, "long_running": ["serve"] }
+{
+  "timeouts": { "start": 120, "send": 120, "poke": 30, "flush": 180 },
+  "queue_expiry": { "reveal": 0, "preview": 0 },
+  "long_running": ["serve"]
+}

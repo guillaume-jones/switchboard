@@ -2,6 +2,7 @@
 # sessions.launch {prompt?, cwd?, session?, attach?}: opens an interactive Claude Code session in the terminal named in
 # settings.json, resuming session if given, or attaching to the background session with short id attach. The run succeeds once the terminal opens; the session is tracked by hooks.
 cwd=${SWB_ARG_CWD:-$HOME}
+[[ -n $SWB_ARG_SESSION ]] && model=$("$SWB" query sessions_items id=$SWB_ARG_SESSION | jq -r '.[0].model // empty')
 terminal=$(jq -er .terminal "$SWITCHBOARD_HOME/settings.json" 2>/dev/null) || terminal=Terminal
 script=$SWITCHBOARD_HOME/data/launch/$RUN_ID.command
 mkdir -p ${script:h}
@@ -10,7 +11,7 @@ cat > $script <<SCRIPT
 cd ${(q)cwd} || exit 1
 export RUN_ID=${(q)RUN_ID} SWITCHBOARD_HOME=${(q)SWITCHBOARD_HOME} SWB=${(q)SWB} PATH=${(q)PATH}
 ${SWB_ARG_ATTACH:+exec claude attach ${(q)SWB_ARG_ATTACH}}
-exec claude --settings ${(q)SOURCE_DIR}/files/claude-hooks.json ${SWB_ARG_SESSION:+--resume ${(q)SWB_ARG_SESSION}} ${SWB_ARG_PROMPT:+${(q)SWB_ARG_PROMPT}}
+exec claude --settings ${(q)SOURCE_DIR}/files/claude-hooks.json ${SWB_ARG_SESSION:+--resume ${(q)SWB_ARG_SESSION}} ${model:+--model ${(q)model}} ${SWB_ARG_PROMPT:+${(q)SWB_ARG_PROMPT}}
 SCRIPT
 chmod +x $script
 if [[ $OSTYPE == darwin* ]]; then

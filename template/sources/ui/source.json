@@ -1,1 +1,1 @@
-{ "timeouts": { "open": 10 }, "queue_expiry": { "open": 0 } }
+{ "timeouts": { "open": 10, "restart": 30 }, "queue_expiry": { "open": 0, "restart": 0 } }

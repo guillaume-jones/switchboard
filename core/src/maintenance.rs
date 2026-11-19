@@ -58,6 +58,9 @@ pub fn init(home: &Path, template: Template, force: bool) -> Result<()> {
                     fs::set_permissions(command, fs::Permissions::from_mode(0o755))?;
                 }
             }
+            for (_, hook) in sorted_entries(&staging.join(".githooks")) {
+                fs::set_permissions(hook, fs::Permissions::from_mode(0o755))?;
+            }
         }
         Template::Linked(url) | Template::Copied(url) => {
             let shallow = matches!(template, Template::Copied(_)).then_some("--depth=1");
@@ -79,6 +82,9 @@ pub fn init(home: &Path, template: Template, force: bool) -> Result<()> {
         let succeeds = |args: &[&str]| git(&staging, args).is_ok_and(|o| o.status.success());
         if succeeds(&["init", "-q"]) {
             install_hook(&staging);
+            if staging.join(".githooks").is_dir() {
+                succeeds(&["config", "core.hooksPath", ".githooks"]);
+            }
             succeeds(&["add", "-A"]);
             let commit = ["commit", "-q", "--no-verify", "-m", "Initial switchboard folder"];
             if !succeeds(&commit) {

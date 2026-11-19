@@ -14,31 +14,8 @@ const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-dig
 const LINE: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', padding: '4px 0' }
 const MUTED: CSSProperties = { color: 'var(--muted)' }
 const ACTION: CSSProperties = { marginLeft: 'auto' }
-const POPOVER: CSSProperties = {
-  position: 'absolute',
-  right: 0,
-  top: 'calc(100% + 10px)',
-  width: 'min(520px, calc(100vw - 20px))',
-  maxHeight: '60vh',
-  overflow: 'auto',
-  background: 'var(--panel)',
-  border: '1px solid color-mix(in srgb, var(--fg) 14%, transparent)',
-  borderRadius: 'var(--radius)',
-  boxShadow: '0 16px 48px #000b',
-  zIndex: 1,
-}
-const BACKDROP: CSSProperties = { position: 'fixed', inset: 0, background: '#0008' }
-const SUMMARY_BUTTON: CSSProperties = {
-  border: 'none',
-  background: 'none',
-  display: 'inline-flex',
-  gap: 6,
-  alignItems: 'center',
-  fontWeight: 600,
-  opacity: 1,
-}
 
-/** Open attention items, disabled rules, runs in an unknown state and recent errors: a count with a popover. */
+/** Open attention items, disabled rules, runs in an unknown state and recent errors: a count that opens them in a modal. */
 export default function Health() {
   const attention = useQuery<AttentionItem>('attention_open') ?? []
   const disabledRules = useQuery<Rule>('core_rules', { enabled: 0 }) ?? []
@@ -54,7 +31,10 @@ export default function Health() {
       ? 'Reconnecting'
       : `Offline${connection.asOf ? ` as of ${clock(connection.asOf)}` : ''}`
   const connectionDot = (
-    <span style={{ color: connection.state === 'reconnecting' ? 'var(--warn)' : 'var(--bad)' }}>●</span>
+    <span
+      className="dot"
+      style={{ '--tone': connection.state === 'reconnecting' ? 'var(--warn)' : 'var(--bad)' } as CSSProperties}
+    />
   )
 
   const problems = [
@@ -76,7 +56,8 @@ export default function Health() {
     <div style={{ padding: '8px 12px' }}>
       {healthy && (
         <div className="empty">
-          <span style={{ color: 'var(--good)' }}>●</span> All healthy
+          <span className="dot" style={{ '--tone': 'var(--good)', display: 'inline-block' } as CSSProperties} /> All
+          healthy
         </div>
       )}
       {!online && (
@@ -88,7 +69,7 @@ export default function Health() {
       <Section title="Attention">
         {attention.map(item => (
           <div key={item.id} style={LINE}>
-            <span style={{ color: attentionColor(item.level) }}>●</span>
+            <span className="dot" style={{ '--tone': attentionColor(item.level) } as CSSProperties} />
             <Item ref={item.ref} />
             <span style={{ ...MUTED, flex: 1 }}>{item.reason}</span>
             <button onClick={() => mutate('attention.clear', { ref: item.ref })} style={ACTION}>
@@ -136,28 +117,31 @@ export default function Health() {
   )
 
   return (
-    <span style={{ position: 'relative' }}>
-      <button onClick={() => setOpen(isOpen => !isOpen)} title={summary} className="health" style={SUMMARY_BUTTON}>
-        {healthy && <span style={{ color: 'var(--good)' }}>●</span>}
-        {!online && (
-          <span>
-            {connectionDot} {connectionLabel}
-          </span>
-        )}
+    <>
+      <button onClick={() => setOpen(isOpen => !isOpen)} title={summary} className="ghost health">
+        <span style={{ flex: 1, textAlign: 'left' }}>{online ? 'Health' : connectionLabel}</span>
+        {healthy && <span className="dot" style={{ '--tone': 'var(--good)' } as CSSProperties} />}
+        {!online && connectionDot}
         {attention.length > 0 && (
-          <span style={{ color: attentionColor(Math.max(...attention.map(item => item.level))) }}>
-            ● {attention.length}
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              color: attentionColor(Math.max(...attention.map(item => item.level))),
+            }}
+          >
+            <span className="dot" style={{ '--tone': 'currentColor' } as CSSProperties} />
+            {attention.length}
           </span>
         )}
         {failures > 0 && <span style={{ color: 'var(--bad)' }}>▲ {failures}</span>}
       </button>
-      {open && (
-        <>
-          <div style={BACKDROP} onClick={() => setOpen(false)} />
-          <div style={POPOVER}>{details}</div>
-        </>
-      )}
-    </span>
+      <div className="backdrop" data-closed={!open || undefined} onClick={() => setOpen(false)} />
+      <div className="modal" data-closed={!open || undefined} role="dialog" aria-label="Health">
+        {details}
+      </div>
+    </>
   )
 }
 

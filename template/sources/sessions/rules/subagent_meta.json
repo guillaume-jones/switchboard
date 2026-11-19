@@ -1,0 +1,8 @@
+{
+  "id": "sessions-subagent-meta",
+  "when": { "files": "~/.claude/projects/*/*/subagents/*.meta.json" },
+  "run": "sessions.subagent",
+  "into": "sessions.subagent_meta",
+  "args": { "path": "{path}" },
+  "max_per_hour": 500
+}

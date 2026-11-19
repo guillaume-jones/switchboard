@@ -7,6 +7,8 @@
   "ignorePatterns": [
     "app/src-tauri/gen",
     "app/package-lock.json",
-    "template/cards/lib/marked.*"
+    "template/cards/lib/marked.*",
+    "template/cards/lib/octicons.*",
+    "template/cards/lib/xterm*"
   ]
 }

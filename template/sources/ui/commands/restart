@@ -1,0 +1,6 @@
+#!/bin/zsh
+# ui.restart: quits Switchboard, waits for it to exit, and opens it again from /Applications, picking up a new install.
+osascript -e 'quit app "Switchboard"'
+for _ in {1..100}; do pgrep -xq switchboard || break; sleep 0.1; done
+pgrep -xq switchboard && { print -r -- '{"outcome": "failure", "summary": "Switchboard did not quit"}'; exit 1 }
+open -a Switchboard

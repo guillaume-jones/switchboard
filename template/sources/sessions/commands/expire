@@ -1,0 +1,10 @@
+#!/bin/zsh
+# sessions.expire: drops decisions, answered or not, that nothing waits for any more. Whatever waits for an answer (files/decide, or
+# sessions.serve for held sessions) holds the FIFO data/decisions/<session> and removes it on exit; a decision older
+# than GRACE ms without one belongs to a session that is gone.
+GRACE=30000
+now=$(( $(date +%s) * 1000 ))
+"$SWB" query sessions_items | jq -r '.[] | select(.decision != null) | "\(.id) \(.decision | fromjson | .at)"' | while read -r id at; do
+  (( now - at > GRACE )) && [[ ! -p $SWITCHBOARD_HOME/data/decisions/$id ]] && "$SWB" write sessions.decision_drop id=$id at=$at
+done
+exit 0

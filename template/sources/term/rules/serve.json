@@ -1,0 +1,1 @@
+{ "id": "term-serve", "when": { "view": "term_down" }, "key": "{last}", "run": "term.serve" }

@@ -1,0 +1,6 @@
+#!/bin/zsh
+# sessions.preview {path}: stages an attached file (under data/attachments/<id>/) for cards to read through sessions.attachments.
+path_=${SWB_ARG_PATH:A}
+[[ $path_ == $SWITCHBOARD_HOME/data/attachments/* && -f $path_ ]] || { print -u2 "not an attachment: $SWB_ARG_PATH"; exit 1 }
+base64 -i $path_ | tr -d '\n' | jq -Rs --arg id ${path_:h:t} --arg name ${path_:t} '{id: $id, name: $name, data: .}' |
+  "$SWB" write sessions.preview_add >/dev/null

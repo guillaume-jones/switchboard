@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -8,7 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 import { mutate, run, useQuery } from 'switchboard'
-import { renderMarkdown } from './markdown'
+import { clickedCode, copyCode, renderMarkdown } from './markdown'
 import { useMobile } from './theme'
 
 type Decision = { tool_name: string; tool_input: Record<string, any>; at: number }
@@ -29,10 +30,13 @@ const USER: CSSProperties = { background: 'var(--raised)', boxShadow: 'inset 3px
 const ASSISTANT: CSSProperties = { boxShadow: 'inset 3px 0 var(--claude)' }
 
 /** A saved attachment's path (alone or on an older "Attached file:" line), or the `[file: name]` placeholder of an unsent one. */
-const ATTACHMENT = /(?:^Attached file: )?(\/\S*\/data\/attachments\/[\w-]+\/[\w.-]+)|\[file: ([^\]\n]+)\]/gm
+const ATTACHMENT = /(?:^Attached file: )?(\/\S*\/data\/attachments\/[\w-]+\/[\w.-]*[\w-])|\[file: ([^\]\n]+)\]/gm
 /** A message's text without its attachments, for matching a sent prompt to the message it became. */
-export const withoutAttachments = (text: string) => text.replace(ATTACHMENT, '').trim()
+const withoutAttachments = (text: string) => text.replace(ATTACHMENT, '').trim()
 const placeholder = (name: string) => `[file: ${name.replace(/[\]\n]/g, '_')}]`
+const IMAGE = /\.(png|jpe?g|gif|webp)$/i
+/** The code Zed inlines for an `@file#L1:2` mention, which the message already links to: shown as a fenced code block. */
+const CONTEXT = /<context ref="file:\/\/[^"]*?(?:\.(\w+))?(?:#[^"]*)?">\n?([\s\S]*?)\n?<\/context>/g
 const escapeHtml = (value: string) => value.replace(/[&<>"]/g, c => `&#${c.charCodeAt(0)};`)
 
 /**
@@ -46,52 +50,110 @@ export function Bubble({
   text,
   faded,
   action,
+  onRunCode,
 }: {
   role: string
   label: string
   text: string
   faded?: boolean
   action?: ReactNode
+  onRunCode?: (code: string) => void
 }) {
   const opacity = faded ? 0.5 : undefined
   const mobile = useMobile()
-  const chips: string[] = []
-  const body =
-    role === 'user'
-      ? text.replace(ATTACHMENT, (_, path?: string, name?: string) => {
-          const label = escapeHtml(path?.split('/').pop() ?? name!)
-          chips.push(
-            path && !mobile
-              ? `<button type="button" class="chip file" data-path="${escapeHtml(path)}" title="Open ${escapeHtml(path)}">${label}</button>`
-              : `<button type="button" class="chip file" disabled>${label}</button>`,
-          )
-          return `ATTACHMENTCHIP${chips.length - 1}END`
-        })
-      : text
-  const html = renderMarkdown(body).replace(/ATTACHMENTCHIP(\d+)END/g, (_, i) => chips[Number(i)])
+  const [image, setImage] = useState<string>()
+  const html = useMemo(() => {
+    const chips: string[] = []
+    const body =
+      role === 'user'
+        ? text.replace(CONTEXT, '```$1\n$2\n```').replace(ATTACHMENT, (_, path?: string, name?: string) => {
+            const label = escapeHtml(path?.split('/').pop() ?? name!)
+            chips.push(
+              path && (!mobile || IMAGE.test(path))
+                ? `<button type="button" class="chip file" data-path="${escapeHtml(path)}" title="Open ${escapeHtml(path)}">${label}</button>`
+                : `<button type="button" class="chip file" disabled>${label}</button>`,
+            )
+            return `ATTACHMENTCHIP${chips.length - 1}END`
+          })
+        : text
+    return renderMarkdown(body).replace(/ATTACHMENTCHIP(\d+)END/g, (_, i) => chips[Number(i)])
+  }, [role, text, mobile])
   return (
     <div style={{ ...BUBBLE, ...(role === 'user' ? USER : ASSISTANT) }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', opacity }}>
-          {role === 'user' ? 'User' : 'Agent'} · {label}
+          <span
+            style={{ color: role === 'user' ? 'color-mix(in srgb, var(--accent) 60%, var(--muted))' : 'var(--claude)' }}
+          >
+            {role === 'user' ? 'User' : 'Agent'}
+          </span>{' '}
+          · {label}
         </span>
-        {action && <span style={{ marginLeft: 'auto' }}>{action}</span>}
+        {action && (
+          <span style={{ marginLeft: 'auto', height: 0, display: 'flex', alignItems: 'center' }}>{action}</span>
+        )}
       </div>
       <div
         className="message"
         style={{ opacity }}
+        data-runnable={onRunCode ? '' : undefined}
         onClick={e => {
+          copyCode(e)
+          const code = clickedCode(e.target, '.run-code')
+          if (code !== undefined) onRunCode?.(code)
           const path = (e.target as Element).closest<HTMLElement>('[data-path]')?.dataset.path
-          if (path) run('sessions.reveal', { path })
+          if (path && IMAGE.test(path)) setImage(path)
+          else if (path) run('sessions.reveal', { path })
         }}
         dangerouslySetInnerHTML={{ __html: html }}
       />
+      {image && <ImageModal path={image} onClose={() => setImage(undefined)} />}
     </div>
+  )
+}
+/** A saved image attachment, staged into the database by `sessions.preview` while shown and dropped on close. */
+function ImageModal({ path, onClose }: { path: string; onClose: () => void }) {
+  const id = path.split('/').at(-2)!
+  const [runId, setRunId] = useState<string>()
+  const [error, setError] = useState('')
+  const row = useQuery<{ data: string }>('sessions.attachments', { ids: JSON.stringify([id]) })?.[0]
+  const failed = useQuery<{ state: string }>('core_runs', { id: runId ?? '' })?.[0]?.state === 'failure'
+
+  useEffect(() => {
+    run('sessions.preview', { path }).then(setRunId, (e: Error) => setError(e.message))
+    const close = (e: globalThis.KeyboardEvent) => e.key === 'Escape' && onClose()
+    window.addEventListener('keydown', close)
+    return () => {
+      window.removeEventListener('keydown', close)
+      mutate('sessions.detach', { id })
+    }
+  }, [path])
+
+  const type = path.match(IMAGE)![1].toLowerCase().replace('jpg', 'jpeg')
+  return (
+    <>
+      <div className="backdrop" onClick={onClose} />
+      <div className="modal image-modal" role="dialog" aria-label={path.split('/').pop()} onClick={onClose}>
+        <button className="icon close" aria-label="Close" onClick={onClose}>
+          ×
+        </button>
+        {row ? (
+          <img src={`data:image/${type};base64,${row.data}`} alt={path.split('/').pop()} />
+        ) : error || failed ? (
+          <div className="empty">{error || 'Could not load the image'}</div>
+        ) : (
+          <div className="empty">
+            <Spinner />
+          </div>
+        )}
+      </div>
+    </>
   )
 }
 export const WAITING = ['needs_permission', 'needs_input']
 export const TONES: Record<string, string> = {
   working: 'info',
+  waiting: 'agents',
   needs_permission: 'warn',
   needs_input: 'warn',
   ready: 'good',
@@ -109,6 +171,44 @@ const HOSTS: Record<string, string> = {
   vscode: 'VS Code',
   WezTerm: 'WezTerm',
 }
+export const MODELS: Record<string, string> = {
+  fable: 'claude-fable-5-2',
+  opus: 'claude-opus-5-5',
+  sonnet: 'claude-sonnet-5-5',
+  haiku: 'claude-haiku-5-5',
+}
+
+/** Picks one of `MODELS` by name; `onChange` gets the model's name, `value` is a name too (none shows "Model"). */
+export function ModelSelect({
+  value,
+  onChange,
+  className,
+  disabled,
+}: {
+  value?: string
+  onChange: (name: string, model: string) => void
+  className?: string
+  disabled?: boolean
+}) {
+  return (
+    <select
+      className={className}
+      aria-label="Model"
+      title="Change model"
+      disabled={disabled}
+      value={value ?? ''}
+      onChange={e => onChange(e.target.value, MODELS[e.target.value])}
+    >
+      {!value && <option value="">Model</option>}
+      {Object.keys(MODELS).map(name => (
+        <option key={name} value={name}>
+          {name[0].toUpperCase() + name.slice(1)}
+        </option>
+      ))}
+    </select>
+  )
+}
+
 export const hostName = (session: Session) => HOSTS[session.host ?? ''] ?? session.host ?? 'Unknown app'
 
 export type Session = {
@@ -125,6 +225,8 @@ export type Session = {
   decision: string | null
   updated: string
   hidden: number
+  notified?: number
+  model?: string | null
 }
 
 const SAVE_DELAY = 500
@@ -170,7 +272,7 @@ function save(key: string) {
 }
 addEventListener('pagehide', () => edits.forEach((edit, key) => edit.timer && save(key)))
 
-function setDraft(key: string, next: string | ((current: string) => string)) {
+export function setDraft(key: string, next: string | ((current: string) => string)) {
   const text = typeof next === 'function' ? next(readDraft(key)) : next
   const edit = edits.get(key) ?? { text, sent: new Set<string>(), saved: false }
   clearTimeout(edit.timer)
@@ -192,6 +294,17 @@ export function useDraft(key: string) {
   return [edit ?? value ?? '', (next: string | ((current: string) => string)) => setDraft(key, next)] as const
 }
 
+/** Archives a session, first moving `client` off it to the next chat in the sidebar, else the previous, else a new chat. */
+export function useArchive(client: string) {
+  const sessions = useQuery<Session>('sessions.recent', { limit: 50, hidden: 0 }) ?? []
+  return (id: string, open: boolean) => {
+    const at = sessions.findIndex(s => s.id === id)
+    const next = sessions[at + 1] ?? sessions[at - 1]
+    const away = open ? mutate('ui.open_chat', { client, session: next?.id ?? '' }) : Promise.resolve(0)
+    return away.then(() => mutate('sessions.hide', { id }))
+  }
+}
+
 export type Attachment = { id: string; name: string }
 const parseFiles = (value: string): Attachment[] => (value ? JSON.parse(value) : [])
 
@@ -207,6 +320,25 @@ export type Outbox = {
   sent_at: number | null
 }
 export const useOutbox = (session: string) => useQuery<Outbox>('sessions_outbox', { session }) ?? []
+
+/**
+ * Messages being sent, from this client at once and from `sessions_outbox`, kept until the transcript shows them (see
+ * `SessionTranscript`), so a message never blinks out between leaving the outbox and reaching the transcript.
+ */
+export type Pending = { text: string; at: number }
+const pending = new Map<string, Pending[]>()
+const NONE: Pending[] = []
+export const setPending = (session: string, update: (sends: Pending[]) => Pending[]) => {
+  const next = update(pending.get(session) ?? NONE)
+  if (next === pending.get(session)) return
+  pending.set(session, next)
+  emit()
+}
+/** Whether `text` holds `message` whole, alone or among follow-ups joined into one (see `sessions.queue_add`). */
+export const containsMessage = (text: string, message: string) =>
+  `\n\n${withoutAttachments(text)}\n\n`.includes(`\n\n${withoutAttachments(message)}\n\n`)
+export const usePending = (session: string) =>
+  useSyncExternalStore(subscribeToEdits, () => pending.get(session) ?? NONE)
 /** An outbox message's text with its `{{attachment:<id>}}` references shown as the message box's placeholders. */
 export const outboxText = ({ text, files }: Outbox) =>
   parseFiles(files).reduce((shown, f) => shown.replaceAll(`{{attachment:${f.id}}}`, placeholder(f.name)), text)
@@ -243,7 +375,7 @@ async function upload(file: File): Promise<Attachment> {
   return { id, name }
 }
 
-const draftKey = (session: string) => `Composer.draft.${session}`
+export const draftKey = (session: string) => `Composer.draft.${session}`
 const filesKey = (session: string) => `Composer.files.${session}`
 
 /** Puts a queued or failed follow-up back into its message box, ahead of anything typed since. */
@@ -254,10 +386,11 @@ function unqueue(entry: Outbox) {
     const files = [...parseFiles(entry.files), ...parseFiles(current)]
     return files.length ? JSON.stringify(files) : ''
   })
+  setPending(session, sends => sends.filter(p => !containsMessage(outboxText(entry), p.text)))
   return mutate('sessions.queue_cancel', { session, queued_at: entry.queued_at })
 }
 
-export const busy = (session: Session) => session.status === 'working'
+export const busy = (session: Session) => ['working', 'waiting'].includes(session.status)
 
 /** A message Claude has been sent but not taken yet, which an interrupt (`sessions.stop`) hands to it at once. */
 export const interruptible = (session: Session, entry: Outbox) =>
@@ -299,40 +432,36 @@ export function QueuedMessage({ session, onError }: { session: Session; onError:
   const fail = (e: Error) => onError(e.message)
   const failed = entry.state === 'failed'
   return (
-    <div className="grow">
-      <div>
-        <Bubble
-          role="user"
-          label={failed ? `Not sent · ${entry.error}` : 'Queued'}
-          text={outboxText(entry)}
-          faded
-          action={
-            <span style={{ display: 'flex', gap: 4 }}>
-              <button
-                type="button"
-                className="ghost"
-                style={QUEUE_BUTTON}
-                title="Back to the message box (Esc)"
-                onClick={() => unqueue(entry).catch(fail)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="ghost"
-                style={QUEUE_BUTTON}
-                title={failed ? 'Send again' : 'Send now (⌘↩ with an empty message box)'}
-                onClick={() =>
-                  mutate('sessions.queue_send', { session: session.id, interject: failed ? 0 : 1 }).catch(fail)
-                }
-              >
-                {failed ? 'Retry' : 'Send now'}
-              </button>
-            </span>
-          }
-        />
-      </div>
-    </div>
+    <Bubble
+      role="user"
+      label={failed ? `Not sent · ${entry.error}` : 'Queued'}
+      text={outboxText(entry)}
+      faded
+      action={
+        <span style={{ display: 'flex', gap: 4 }}>
+          <button
+            type="button"
+            className="ghost"
+            style={QUEUE_BUTTON}
+            title="Back to the message box (Esc)"
+            onClick={() => unqueue(entry).catch(fail)}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            style={QUEUE_BUTTON}
+            title={failed ? 'Send again' : 'Send now (⌘↩ with an empty message box)'}
+            onClick={() =>
+              mutate('sessions.queue_send', { session: session.id, interject: failed ? 0 : 1 }).catch(fail)
+            }
+          >
+            {failed ? 'Retry' : 'Send now'}
+          </button>
+        </span>
+      }
+    />
   )
 }
 
@@ -350,6 +479,8 @@ export function MessageBox({
   onKeyDown,
   button,
   actions,
+  cwd,
+  onStop,
 }: {
   draft: string
   files: string
@@ -359,32 +490,89 @@ export function MessageBox({
   onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void
   button?: ReactNode
   actions?: ReactNode
+  cwd?: string | null
+  /** Replaces send with a stop button while the box is empty. */
+  onStop?: () => void
 }) {
   const [text, setText] = useDraft(draft)
+  const commandRows = useQuery<{ cwd: string; name: string }>('sessions_commands') ?? []
+  const ownRows = commandRows.filter(c => c.cwd === cwd)
+  const commands = [...new Set((ownRows.length ? ownRows : commandRows).map(c => c.name))].filter(
+    name => !name.startsWith('_'),
+  )
+  const [caret, setCaret] = useState(text.length)
+  const token = /(?:^|\s)\/(\S*)$/.exec(text.slice(0, caret))
+  const typed = token?.[1].toLowerCase()
+  const [dismissed, setDismissed] = useState<string>()
+  const [active, setActive] = useState(0)
+  const matches =
+    typed === undefined || dismissed === text
+      ? []
+      : commands
+          .filter(name => name.includes(typed))
+          .sort((a, b) => Number(!a.startsWith(typed)) - Number(!b.startsWith(typed)))
+  const highlighted = Math.min(active, matches.length - 1)
+  const pickCommand = (name: string) => {
+    const start = caret - typed!.length - 1
+    const end = caret + /^\S*/.exec(text.slice(caret))![0].length
+    const inserted = `/${name} `
+    const at = start + inserted.length
+    setText(text.slice(0, start) + inserted + text.slice(end).replace(/^ /, ''))
+    setCaret(at)
+    requestAnimationFrame(() => {
+      box.current?.focus()
+      box.current?.setSelectionRange(at, at)
+    })
+  }
   const [filesDraft, setFilesDraft] = useDraft(filesKey)
   const [uploading, setUploading] = useState(0)
   const picker = useRef<HTMLInputElement>(null)
   const box = useRef<HTMLTextAreaElement>(null)
+  const mobile = useMobile()
+  useEffect(() => {
+    if (!mobile) box.current?.focus()
+  }, [draft])
   const attach = (list: FileList | null) => {
-    if (!list?.length) return
+    const files = [...(list ?? [])]
+    if (!files.length) return
     const at = box.current?.selectionStart ?? text.length
-    setText(text.slice(0, at) + [...list].map(file => placeholder(file.name)).join(' ') + text.slice(at))
-    setUploading(n => n + list.length)
-    for (const file of list)
+    setText(text.slice(0, at) + files.map(file => placeholder(file.name)).join(' ') + text.slice(at))
+    setUploading(n => n + files.length)
+    for (const file of files)
       upload(file)
         .then(({ id }) => setFilesDraft(current => JSON.stringify([...parseFiles(current), { id, name: file.name }])))
         .catch((e: Error) => onError(e.message))
         .finally(() => setUploading(n => n - 1))
   }
   const send = () => {
-    if (!uploading) onSend(text.trim(), parseFiles(filesDraft))
+    if (uploading) return
+    for (const [, used] of text.matchAll(/(?:^|\s)\/(\S+)/g))
+      if (commands.includes(used)) mutate('sessions.command_used', { name: used }).catch(console.error)
+    onSend(text.trim(), parseFiles(filesDraft))
   }
   return (
-    <div style={{ flex: 1, minWidth: 0 }}>
+    <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
       {uploading > 0 && (
         <span className="chip file" style={{ marginBottom: 6 }}>
           <Spinner />
         </span>
+      )}
+      {matches.length > 0 && (
+        <div className="folder-list" role="listbox">
+          {matches.map((name, i) => (
+            <button
+              key={name}
+              type="button"
+              role="option"
+              aria-selected={i === highlighted}
+              onMouseDown={e => e.preventDefault()}
+              onMouseEnter={() => setActive(i)}
+              onClick={() => pickCommand(name)}
+            >
+              /{name}
+            </button>
+          ))}
+        </div>
       )}
       <form
         className="composer"
@@ -413,21 +601,27 @@ export function MessageBox({
             e.target.value = ''
           }}
         />
-        <button
-          type="button"
-          className="ghost icon round attach"
-          title="Attach files"
-          aria-label="Attach files"
-          onClick={() => picker.current?.click()}
-        >
-          <PaperclipIcon />
-        </button>
         <textarea
           ref={box}
           value={text}
-          onChange={e => setText(e.target.value)}
+          onChange={e => {
+            setText(e.target.value)
+            setCaret(e.target.selectionStart)
+            setActive(0)
+          }}
+          onSelect={e => setCaret(e.currentTarget.selectionStart)}
           onKeyDown={e => {
-            if (e.key === 'Enter' && e.metaKey) {
+            if (matches.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+              e.preventDefault()
+              setActive((highlighted + (e.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length)
+            } else if (matches.length && (e.key === 'Tab' || (e.key === 'Enter' && !e.metaKey))) {
+              e.preventDefault()
+              pickCommand(matches[highlighted])
+            } else if (matches.length && e.key === 'Escape') {
+              e.preventDefault()
+              e.stopPropagation()
+              setDismissed(text)
+            } else if (e.key === 'Enter' && e.metaKey) {
               e.preventDefault()
               send()
             } else onKeyDown?.(e)
@@ -438,15 +632,32 @@ export function MessageBox({
           rows={1}
         />
         {actions}
-        <button
-          type="submit"
-          className={button ? 'primary round' : 'primary icon round'}
-          disabled={!text.trim() || uploading > 0}
-          title="Send"
-          aria-label="Send"
-        >
-          {button ?? <SendIcon />}
-        </button>
+        <span className="composer-buttons">
+          <button
+            type="button"
+            className="ghost icon round attach"
+            title="Attach files"
+            aria-label="Attach files"
+            onClick={() => picker.current?.click()}
+          >
+            <PaperclipIcon />
+          </button>
+          {onStop && !text.trim() ? (
+            <button type="button" className="primary icon round send" title="Stop" aria-label="Stop" onClick={onStop}>
+              <StopIcon />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="primary icon round send"
+              disabled={!text.trim() || uploading > 0}
+              title="Send"
+              aria-label="Send"
+            >
+              {button ?? <SendIcon />}
+            </button>
+          )}
+        </span>
       </form>
     </div>
   )
@@ -455,22 +666,17 @@ export function MessageBox({
 /**
  * Message box for a session. Send (⌘↩) adds a follow-up to `sessions.queue`, which the desktop sends at once to a session
  * it holds, where Claude takes it at its next pause, and otherwise once Claude is neither working nor asking for a
- * permission; the card must show the queue with `QueuedMessage`. `onQueued` is called for each message. Sending an empty
+ * permission; the card must show the queue with `QueuedMessage`. Sending an empty
  * box sends the queue now, or interrupts Claude's turn so that it takes the message waiting for it; Esc moves a queued
  * message back into the box.
  */
-export function Composer({
-  session,
-  onError,
-  onQueued,
-}: {
-  session: Session
-  onError: (message: string) => void
-  onQueued?: () => void
-}) {
+export function Composer({ session, onError }: { session: Session; onError: (message: string) => void }) {
   const entries = useOutbox(session.id)
   const queued = entries.find(e => e.state !== 'sending')
+  const editing = !!useQuery('sessions_rewinds', { session: session.id })?.length
   const fail = (e: Error) => onError(e.message)
+  const cancelEdit = () =>
+    mutate('sessions.rewind_cancel', { session: session.id }).then(() => setDraft(draftKey(session.id), ''), fail)
   const send = (prompt: string, files: Attachment[]) => {
     if (!prompt) {
       if (queued) mutate('sessions.queue_send', { session: session.id, interject: 1 }).catch(fail)
@@ -481,38 +687,50 @@ export function Composer({
     const ids = attachments.split(',')
     setDraft(draftKey(session.id), '')
     setDraft(filesKey(session.id), '')
+    const message = { text: prompt, at: Date.now() }
+    setPending(session.id, sends => [...sends, message])
     mutate('sessions.queue_add', {
       session: session.id,
       text,
       files: JSON.stringify(files.filter(f => ids.includes(f.id))),
-    }).catch(fail)
-    onQueued?.()
+    }).catch((e: Error) => {
+      setPending(session.id, sends => sends.filter(s => s !== message))
+      fail(e)
+    })
   }
   return (
     <MessageBox
       draft={draftKey(session.id)}
       files={filesKey(session.id)}
       placeholder="Message Claude…"
+      cwd={session.cwd}
       onSend={send}
       onError={onError}
       onKeyDown={e => {
-        if (e.key !== 'Escape' || !queued) return
+        if (e.key !== 'Escape' || !(queued || editing)) return
         e.preventDefault()
-        unqueue(queued).catch(fail)
+        if (queued) unqueue(queued).catch(fail)
+        else cancelEdit()
       }}
       actions={
-        session.kind === 'background' &&
-        busy(session) && (
-          <button
-            type="button"
-            className="danger icon round"
-            title="Stop"
-            aria-label="Stop"
-            onClick={() => run('sessions.stop', { session: session.id }).catch((e: Error) => onError(e.message))}
-          >
-            <StopIcon />
-          </button>
-        )
+        <>
+          {editing && (
+            <button
+              type="button"
+              className="ghost icon round"
+              title="Cancel the edit (Esc)"
+              aria-label="Cancel the edit"
+              onClick={cancelEdit}
+            >
+              ✕
+            </button>
+          )}
+        </>
+      }
+      onStop={
+        session.kind === 'background' && busy(session)
+          ? () => run('sessions.stop', { session: session.id }).catch(fail)
+          : undefined
       }
     />
   )
@@ -537,13 +755,13 @@ function PaperclipIcon() {
 
 function StopIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-      <rect x="3" y="3" width="10" height="10" rx="2" />
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+      <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" />
     </svg>
   )
 }
 
-export function SendIcon() {
+function SendIcon() {
   return (
     <svg
       width="16"
@@ -560,26 +778,8 @@ export function SendIcon() {
   )
 }
 
-const SPIN = '@keyframes sessions-spin { to { transform: rotate(360deg) } }'
-
 export function Spinner() {
-  return (
-    <>
-      <style>{SPIN}</style>
-      <span
-        style={{
-          display: 'inline-block',
-          width: 12,
-          height: 12,
-          margin: '4px 0',
-          border: '2px solid var(--border)',
-          borderTopColor: 'var(--accent)',
-          borderRadius: '50%',
-          animation: 'sessions-spin 0.8s linear infinite',
-        }}
-      />
-    </>
-  )
+  return <span className="spinner" />
 }
 
 export function DecisionPanel({
@@ -643,7 +843,10 @@ function Questions({
   onAnswer: (answers: Record<string, string>) => void
 }) {
   const [picked, setPicked] = useState<Record<string, string[]>>({})
-  const toggle = (q: Question, label: string) =>
+  const [other, setOther] = useState<Record<string, string>>({})
+  const answerFor = (q: Question) => [...(picked[q.question] ?? []), other[q.question]?.trim()].filter(Boolean)
+  const toggle = (q: Question, label: string) => {
+    if (!q.multiSelect) setOther(o => ({ ...o, [q.question]: '' }))
     setPicked(p => {
       const current = p[q.question] ?? []
       const next = q.multiSelect
@@ -653,32 +856,39 @@ function Questions({
         : [label]
       return { ...p, [q.question]: next }
     })
-  const complete = questions.every(q => (picked[q.question] ?? []).length > 0)
+  }
+  const write = (q: Question, text: string) => {
+    if (!q.multiSelect) setPicked(p => ({ ...p, [q.question]: [] }))
+    setOther(o => ({ ...o, [q.question]: text }))
+  }
+  const complete = questions.every(q => answerFor(q).length > 0)
   return (
-    <div style={style}>
+    <div className="decision" style={style}>
       {questions.map(q => (
-        <div key={q.question} style={{ marginBottom: 6 }}>
-          <div style={{ fontWeight: 600 }}>{q.question}</div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div key={q.question} className="question">
+          <div>{q.question}</div>
+          <div className="options">
             {q.options.map(o => (
               <button
                 key={o.label}
-                title={o.description}
+                type="button"
+                className="option"
                 onClick={() => toggle(q, o.label)}
                 aria-pressed={(picked[q.question] ?? []).includes(o.label)}
               >
                 {o.label}
+                {o.description && <span className="description">{o.description}</span>}
               </button>
             ))}
+            <input placeholder="Other…" value={other[q.question] ?? ''} onChange={e => write(q, e.target.value)} />
           </div>
         </div>
       ))}
       <button
         className="primary"
+        style={{ width: '100%' }}
         disabled={!complete}
-        onClick={() =>
-          onAnswer(Object.fromEntries(questions.map(q => [q.question, (picked[q.question] ?? []).join(', ')])))
-        }
+        onClick={() => onAnswer(Object.fromEntries(questions.map(q => [q.question, answerFor(q).join(', ')])))}
       >
         Answer
       </button>

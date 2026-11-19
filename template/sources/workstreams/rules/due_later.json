@@ -1,0 +1,7 @@
+{
+  "id": "workstreams-due-later",
+  "when": { "view": "workstreams_due_later", "schedule": "0 * * * *" },
+  "key": "{id}@{due}",
+  "into": "workstreams.move_now",
+  "args": { "id": "{id}" }
+}

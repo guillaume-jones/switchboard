@@ -1,8 +1,8 @@
-INSERT INTO sessions.items (id, agent, title, status, cwd, run_id, raw, created_at, updated_at, host, entrypoint, last_message, last_prompt, decision)
+INSERT INTO sessions.items (id, agent, title, status, cwd, run_id, raw, created_at, updated_at, host, entrypoint, last_message, last_prompt, decision, origin)
 SELECT
   :payload ->> '$.session_id',
   'claude',
-  substr(:payload ->> '$.prompt', 1, 200),
+  coalesce(:payload ->> '$.title', substr(:payload ->> '$.prompt', 1, 200)),
   'ready',
   :payload ->> '$.cwd',
   :run_id,
@@ -17,17 +17,20 @@ SELECT
     'tool_name', :payload ->> '$.tool_name',
     'tool_input', json(:payload -> '$.tool_input'),
     'at', CAST(unixepoch('subsec') * 1000 AS INTEGER)
-  ), NULL)
-WHERE :payload ->> '$.hook_event_name' <> 'SessionEnd'
+  ), NULL),
+  coalesce(:payload ->> '$.origin', iif(:host IS 'switchboard', NULL, iif(:entrypoint = 'sdk-cli', 'automation', 'me')))
+WHERE :payload ->> '$.hook_event_name' NOT IN ('SessionStart', 'SessionEnd')
+  OR :host IS 'switchboard'
   OR EXISTS (SELECT 1 FROM sessions.items WHERE id = :payload ->> '$.session_id')
 ON CONFLICT (id) DO UPDATE SET
-  title = coalesce(title, excluded.title),
+  title = iif(:payload ->> '$.title' IS NULL, coalesce(title, excluded.title), excluded.title),
   cwd = excluded.cwd,
   run_id = coalesce(excluded.run_id, run_id),
   raw = excluded.raw,
   updated_at = excluded.updated_at,
   host = coalesce(excluded.host, host),
   entrypoint = coalesce(entrypoint, excluded.entrypoint),
+  origin = coalesce(origin, excluded.origin),
   last_message = coalesce(excluded.last_message, last_message),
   last_prompt = coalesce(excluded.last_prompt, last_prompt),
   decision = coalesce(excluded.decision, decision),
@@ -51,7 +54,7 @@ FROM (
       WHEN 'elicitation_url_dialog' THEN 'needs_input'
       WHEN 'agent_needs_input' THEN 'needs_input'
     END
-    WHEN 'Stop' THEN 'ready'
+    WHEN 'Stop' THEN iif(:payload ->> '$.tasks' > 0, 'waiting', 'ready')
     WHEN 'StopFailure' THEN 'errored'
     WHEN 'SessionEnd' THEN 'ended'
   END AS status
@@ -67,4 +70,16 @@ WHERE session = :payload ->> '$.session_id' AND :payload ->> '$.hook_event_name'
 ;
 
 DELETE FROM sessions.folders
-WHERE session = :payload ->> '$.session_id' AND cwd = :payload ->> '$.cwd'
+WHERE session = :payload ->> '$.session_id' AND cwd = :payload ->> '$.cwd';
+
+INSERT OR IGNORE INTO sessions.hidden (session, hidden_at)
+SELECT id, created_at FROM sessions.items
+WHERE id = :payload ->> '$.session_id' AND created_at = updated_at
+  AND (origin IS 'automation' OR (run_id IS NULL AND coalesce(host, '') NOT IN ('switchboard', 'dev.switchboard.app')));
+
+UPDATE sessions.watches SET armed_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
+WHERE session = :payload ->> '$.session_id' AND sticky AND :payload ->> '$.hook_event_name' = 'UserPromptSubmit';
+
+INSERT OR IGNORE INTO sessions.watches (session, armed_at)
+SELECT id, created_at FROM sessions.items
+WHERE id = :payload ->> '$.session_id' AND origin IS 'me' AND host IN ('switchboard', 'dev.switchboard.app') AND created_at = updated_at

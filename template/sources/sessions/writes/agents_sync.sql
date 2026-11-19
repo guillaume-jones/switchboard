@@ -5,7 +5,8 @@ SELECT a.value ->> '$.sessionId', a.value ->> '$.id', a.value ->> '$.kind',
   a.value ->> '$.kind' = 'interactive' OR a.value ->> '$.pid' IS NOT NULL,
   a.value ->> '$.startedAt', coalesce(a.value ->> '$.startedAt', CAST(unixepoch('subsec') * 1000 AS INTEGER))
 FROM json_each(:payload) AS a
-WHERE a.value ->> '$.sessionId' IS NOT NULL
+WHERE a.value ->> '$.sessionId' IS NOT NULL AND a.value ->> '$.name' IS NOT 'swb-title'
+  AND (a.value ->> '$.kind' = 'background' OR EXISTS (SELECT 1 FROM sessions.items WHERE id = a.value ->> '$.sessionId'))
 ON CONFLICT (session) DO UPDATE SET
   short_id = coalesce(excluded.short_id, short_id),
   kind = excluded.kind,

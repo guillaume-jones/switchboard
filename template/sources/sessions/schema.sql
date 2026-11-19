@@ -13,7 +13,8 @@ CREATE TABLE items (
   last_message TEXT,
   last_prompt TEXT,
   decision TEXT,
-  answer TEXT
+  answer TEXT,
+  origin TEXT
 );
 CREATE INDEX items_run ON items (run_id);
 CREATE INDEX items_updated ON items (updated_at);
@@ -29,7 +30,11 @@ CREATE TABLE messages (
   at TEXT NOT NULL,
   role TEXT NOT NULL,
   text TEXT NOT NULL,
-  tokens INTEGER
+  tokens INTEGER,
+  model TEXT,
+  tool_id TEXT,
+  tool_name TEXT,
+  is_error INTEGER
 );
 CREATE INDEX messages_session ON messages (session, at);
 
@@ -98,4 +103,75 @@ CREATE TABLE folders (
   session TEXT PRIMARY KEY NOT NULL,
   cwd TEXT NOT NULL,
   moved_at INTEGER NOT NULL
+);
+
+-- Slash commands Claude reported for a folder in its last init event (sessions.serve).
+CREATE TABLE commands (
+  cwd TEXT NOT NULL,
+  name TEXT NOT NULL,
+  PRIMARY KEY (cwd, name)
+);
+
+CREATE TABLE command_uses (
+  name TEXT PRIMARY KEY NOT NULL,
+  used_at INTEGER NOT NULL
+);
+CREATE INDEX command_uses_used ON command_uses (used_at);
+
+-- When the user last viewed each session's transcript: a session updated since is unread.
+CREATE TABLE seen (
+  session TEXT PRIMARY KEY NOT NULL,
+  seen_at INTEGER NOT NULL
+);
+
+-- Sessions the user asked to be notified about once their current turn ends, or after every turn when sticky.
+CREATE TABLE watches (
+  session TEXT PRIMARY KEY NOT NULL,
+  armed_at INTEGER NOT NULL,
+  sticky INTEGER NOT NULL DEFAULT 0
+);
+
+-- The model picked for a session, which it resumes on from its next message or open on.
+CREATE TABLE models (
+  session TEXT PRIMARY KEY NOT NULL,
+  model TEXT NOT NULL,
+  set_at INTEGER NOT NULL
+);
+
+-- Subagents of transcribed sessions, from Claude Code's subagents/agent-<id>.jsonl lines and .meta.json.
+CREATE TABLE subagents (
+  id TEXT PRIMARY KEY NOT NULL,
+  session TEXT NOT NULL,
+  description TEXT,
+  agent_type TEXT,
+  background INTEGER,
+  activity TEXT,
+  started_at TEXT,
+  updated_at TEXT,
+  done INTEGER
+);
+CREATE INDEX subagents_session ON subagents (session);
+
+-- A user message being edited from Switchboard: it and later messages are hidden, and its session's next send resumes Claude just before it (sessions.serve rewind) and deletes them.
+CREATE TABLE rewinds (
+  session TEXT PRIMARY KEY NOT NULL,
+  uuid TEXT NOT NULL,
+  at TEXT NOT NULL
+);
+
+-- @deprecated sessions.transcript loads only the active branch instead
+CREATE TABLE dropped (
+  uuid TEXT PRIMARY KEY NOT NULL,
+  session TEXT NOT NULL,
+  pending INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX dropped_session ON dropped (session);
+
+-- @deprecated streaming partial messages was dropped
+CREATE TABLE streams (
+  session TEXT PRIMARY KEY NOT NULL,
+  kind TEXT NOT NULL,
+  label TEXT,
+  text TEXT NOT NULL,
+  started_at TEXT NOT NULL
 );

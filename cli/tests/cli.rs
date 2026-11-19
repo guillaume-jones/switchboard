@@ -260,6 +260,9 @@ fn init_replaces_only_an_untouched_folder_unless_forced() {
 
     assert!(swb(&folder, &["init"], None).status.success());
     assert!(folder.join("settings.json").is_file());
+    let hooks_path = Command::new("git").current_dir(&folder).args(["config", "core.hooksPath"]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&hooks_path.stdout), ".githooks\n");
+    assert_eq!(fs::metadata(folder.join(".githooks/pre-commit")).unwrap().permissions().mode() & 0o111, 0o111);
     assert!(swb(&folder, &["init"], None).status.success());
 
     fs::write(folder.join("settings.json"), "{}").unwrap();

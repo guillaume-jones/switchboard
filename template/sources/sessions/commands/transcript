@@ -1,16 +1,31 @@
 #!/bin/zsh
 # sessions.transcript {session}: loads a session's transcript into sessions.messages (query sessions.transcript); the
-# sessions-transcripts rule then adds lines as they are appended, until sessions.transcript_close.
+# sessions-transcripts rule then adds lines as they are appended, until sessions.hide archives it. Only the active branch
+# is loaded: the chain back from the newest entry, across compactions, with the parallel tool calls and results hanging
+# off it, so messages a rewind abandoned stay out.
 path_=$(print -l ~/.claude/projects/*/$SWB_ARG_SESSION.jsonl(N) | head -1)
 [[ -n $path_ ]] || { print -r -- '{"outcome": "failure", "summary": "no transcript for this session"}'; exit 1 }
 "$SWB" write sessions.transcript_open session=$SWB_ARG_SESSION || exit 1
-jq -cs 'map(select(.type == "user" or .type == "assistant" or .subtype == "local_command")
+for meta in ${path_:r}/subagents/*.meta.json(N); do
+  SWB_ARG_PATH=$meta $SOURCE_DIR/commands/subagent | "$SWB" write sessions.subagent_meta
+  { head -n 1 ${meta%.meta.json}.jsonl; tail -n 20 ${meta%.meta.json}.jsonl } | jq -cs . | "$SWB" write sessions.subagent_line
+done
+jq -cs '(map(select(.uuid)) | INDEX(.uuid)) as $by
+  | [[.[] | select(.uuid and (.isSidechain | not))] | last | values
+    | recurse((.parentUuid // .logicalParentUuid) as $p | if $p then $by[$p] // empty else empty end)] as $chain
+  | ($chain | map(.message.id // empty | {key: ., value: true}) | from_entries) as $ids
+  | [.[] | select(.type == "assistant" and $ids[.message.id // ""])] as $parallel
+  | ($chain + $parallel | map(.message.content | arrays | .[] | select(.type == "tool_use") | {key: .id, value: true}) | from_entries) as $calls
+  | ($chain + $parallel + [.[] | select(.type == "user" and any(.message.content | arrays | .[]; .type == "tool_result" and $calls[.tool_use_id // ""]))]
+    | map({key: .uuid, value: true}) | from_entries) as $keep
+  | map(select($keep[.uuid // ""]))
+  | map(select(.type == "user" or .type == "assistant" or .subtype == "local_command" or .attachment.type == "queued_command")
   | .message.content |= (if type == "array" then map(
       if .type == "tool_result" then .content |= ((if type == "array" then map(
           if .type == "text" then .text elif .type == "image" then "[image]" else empty end) | join(" ")
-        else tostring end) | .[0:300])
+        else tostring end) | .[0:500])
       elif .type == "image" then {type}
-      elif .type == "tool_use" then .input |= (tostring | .[0:300])
-      elif .type == "thinking" then empty
+      elif .type == "tool_use" then .name as $name | .input |= (tostring | if (["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"] | index([$name])) then . else .[0:500] end)
+      elif .type == "thinking" then {type}
       else . end) else . end))' $path_ | "$SWB" write sessions.transcript_add || exit 1
 print -r -- '{"outcome": "success", "summary": "loaded"}'

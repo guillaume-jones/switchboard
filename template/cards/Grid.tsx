@@ -1,8 +1,16 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
-import { CardSlot, mutate, useQuery, type CardProps } from 'switchboard'
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
+import { CardSlot, mutate, useCards, useQuery, type CardProps } from 'switchboard'
 
-const COLUMNS = 12
-const ROW_HEIGHT = 32
+const COLUMNS = 24
+const LIST_ROW_HEIGHT = 16
 const GAP = 4
 const MIN_ROWS = 4
 
@@ -13,6 +21,9 @@ type DefaultTile = Tile & { grid: string }
 type Drag = Geometry & { id: string; released: boolean }
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
+/** A tile's `title` prop, else its card's name in words. */
+const heading = (tile: { component: string; props: Record<string, unknown> }) =>
+  typeof tile.props.title === 'string' ? tile.props.title : tile.component.replace(/([a-z])([A-Z])/g, '$1 $2')
 const sameGeometry = (a: Geometry, b: Geometry) => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h
 
 /** Sized by its content, up to most of the screen, so cards that scroll internally still fit. */
@@ -33,8 +44,9 @@ const RESIZE_HANDLE: CSSProperties = {
 }
 
 /**
- * Tiles placed on a 12-column grid, or with `layout: "list"` stacked full width in reading order (`y`, then `x`),
- * where they can be removed but not moved.
+ * A card `<Name>` may come with a `<Name>Header` card, rendered with the same props in its tile bar.
+ * Tiles placed on a 24-column grid of square cells, or with `layout: "list"` stacked full width in reading order (`y`, then `x`),
+ * where they cannot be moved.
  */
 export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?: 'list' }>) {
   const rows = useQuery<Tile>('ui.tiles', { grid })
@@ -43,8 +55,18 @@ export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?
     () => (rows ?? []).map(tile => ({ ...tile, props: JSON.parse(tile.props || '{}') as Record<string, unknown> })),
     [rows],
   )
+  const cards = useCards()
   const [drag, setDrag] = useState<Drag | null>(null)
   const container = useRef<HTMLDivElement>(null)
+  const [cell, setCell] = useState(0)
+
+  useLayoutEffect(() => {
+    const element = container.current
+    if (!element) return
+    const observer = new ResizeObserver(() => setCell(element.clientWidth / COLUMNS))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [layout])
 
   // A released tile stays where it was dropped until the write comes back as new rows, instead of snapping back.
   useEffect(() => setDrag(current => (current?.released ? null : current)), [rows])
@@ -54,13 +76,12 @@ export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?
     e.preventDefault()
     const handle = e.currentTarget
     handle.setPointerCapture(e.pointerId)
-    const cellWidth = container.current!.clientWidth / COLUMNS
     const origin = { x: e.clientX, y: e.clientY }
     let latest: Drag = { ...tile, released: false }
 
     const onMove = (move: PointerEvent) => {
-      const dx = Math.round((move.clientX - origin.x) / cellWidth)
-      const dy = Math.round((move.clientY - origin.y) / ROW_HEIGHT)
+      const dx = Math.round((move.clientX - origin.x) / cell)
+      const dy = Math.round((move.clientY - origin.y) / cell)
       const next =
         mode === 'resize'
           ? { ...latest, w: clamp(tile.w + dx, 1, COLUMNS - tile.x), h: Math.max(1, tile.h + dy) }
@@ -104,18 +125,17 @@ export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?
       </button>
     </div>
   )
-  const removeButton = (id: string) => (
-    <button
-      title="Remove"
-      aria-label="Remove"
-      className="ghost icon danger"
-      onPointerDown={e => e.stopPropagation()}
-      onClick={() => mutate('ui.tile_remove', { grid, id })}
-    >
-      ×
-    </button>
-  )
-
+  const header = (tile: { id: string; component: string; props: Record<string, unknown> }) =>
+    cards.includes(`${tile.component}Header`) && (
+      <div className="tile-header" onPointerDown={e => e.stopPropagation()}>
+        <CardSlot
+          component={`${tile.component}Header`}
+          props={tile.props}
+          size="compact"
+          id={`${grid}/${tile.id}/header`}
+        />
+      </div>
+    )
   if (layout === 'list') {
     return (
       <div
@@ -131,12 +151,12 @@ export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?
         {tiles.map(tile => (
           <div
             key={tile.id}
-            className="tile"
-            style={tile.list_h ? { ...LIST_TILE, height: tile.list_h * ROW_HEIGHT } : LIST_TILE}
+            className="tile fade-in"
+            style={tile.list_h ? { ...LIST_TILE, height: tile.list_h * LIST_ROW_HEIGHT } : LIST_TILE}
           >
-            <div className="tile-bar">
-              <span className="heading">{tile.component}</span>
-              {removeButton(tile.id)}
+            <div className="tile-bar" data-card={tile.component}>
+              <span className="heading">{heading(tile)}</span>
+              {header(tile)}
             </div>
             <div style={{ overflow: 'auto' }}>
               <CardSlot component={tile.component} props={tile.props} id={`${grid}/${tile.id}`} />
@@ -147,7 +167,7 @@ export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?
     )
   }
   const boxes = tiles.map(tile => (drag?.id === tile.id ? { ...tile, ...drag } : tile))
-  const height = Math.max(MIN_ROWS, ...boxes.map(box => box.y + box.h)) * ROW_HEIGHT
+  const height = Math.max(MIN_ROWS, ...boxes.map(box => box.y + box.h + 1)) * cell
 
   return (
     <div style={{ padding: 6, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -161,17 +181,22 @@ export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?
               position: 'absolute',
               left: `${(box.x / COLUMNS) * 100}%`,
               width: `${(box.w / COLUMNS) * 100}%`,
-              top: box.y * ROW_HEIGHT,
-              height: box.h * ROW_HEIGHT,
+              top: box.y * cell,
+              height: box.h * cell,
               padding: GAP,
               boxSizing: 'border-box',
               zIndex: drag?.id === box.id ? 1 : undefined,
             }}
           >
-            <div className={drag?.id === box.id ? 'tile dragging' : 'tile'}>
-              <div data-drag onPointerDown={e => startDrag(e, box, 'move')} className="tile-bar">
-                <span className="heading">{box.component}</span>
-                {removeButton(box.id)}
+            <div className={drag?.id === box.id ? 'tile fade-in dragging' : 'tile fade-in'}>
+              <div
+                data-drag
+                onPointerDown={e => startDrag(e, box, 'move')}
+                className="tile-bar"
+                data-card={box.component}
+              >
+                <span className="heading">{heading(box)}</span>
+                {header(box)}
               </div>
               <div style={{ flex: 1, overflow: 'auto' }}>
                 <CardSlot component={box.component} props={box.props} id={`${grid}/${box.id}`} />

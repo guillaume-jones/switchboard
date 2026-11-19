@@ -1,0 +1,10 @@
+#!/bin/zsh
+# term.serve: ttyd on 127.0.0.1:7681, also served on the tailnet at :7682. Each connection runs files/attach with its
+# URL's args, which attaches to a tmux session only given the token in term_token, new each start, so web pages open on
+# this Mac cannot reach the shell.
+attach=$SOURCE_DIR/files/attach
+export SWB_TERM_TOKEN=$(openssl rand -hex 24)
+$SWB write term.set_token value=$SWB_TERM_TOKEN || exit 1
+unset RUN_ID SWB SOURCE_DIR
+(( $+commands[tailscale] )) && tailscale serve --bg --https=7682 http://127.0.0.1:7681 >&2
+exec ttyd -i 127.0.0.1 -p 7681 -W -a $attach

@@ -1,0 +1,18 @@
+#!/bin/zsh
+# term.list: tmux sessions as JSON. Also sets up the tmux server: hooks that push its sessions to term.sync whenever they
+# change, mouse mode scrolling one line per wheel step, and the board's accent blue for the status line.
+tmux list-sessions -F '#{session_name}	#{pane_current_path}	#{@chat}	#{session_attached}	#{session_created}' 2>/dev/null |
+  jq -Rsc 'split("\n") | map(select(length > 0) | split("\t") | {name: .[0], cwd: .[1], chat: .[2], attached: (.[3] | tonumber), created: (.[4] | tonumber)})' || exit 1
+tmux has-session 2>/dev/null || exit 0
+tmux set-option -s exit-empty off
+tmux set-option -s copy-command pbcopy
+tmux set-option -g mouse on
+tmux set-option -g status-style 'bg=#2563eb,fg=#ffffff'
+tmux bind-key -n WheelUpPane if-shell -F '#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}' 'send-keys -M' 'copy-mode -e; send-keys -X scroll-up'
+for table in copy-mode copy-mode-vi; do
+  tmux bind-key -T $table WheelUpPane send-keys -X scroll-up
+  tmux bind-key -T $table WheelDownPane send-keys -X scroll-down
+done
+for hook in session-created session-closed session-renamed client-attached client-detached; do
+  tmux set-hook -g "${hook}[77]" "run-shell -b '$SOURCE_DIR/files/push $SWB'"
+done

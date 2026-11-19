@@ -2,6 +2,8 @@
 
 The Switchboard app loads this folder on every save. Run `swb check` before you finish: it is the same loader the app and the pre-commit hook run. While a session working in this folder is mid-turn, the app waits to load it until the turn ends, so files can change in any order. A change that fails to load never replaces the running state; its errors go to `core_events` and are raised as attention items, and a turn ending with them is sent back to you once to fix.
 
+Commit your own changes on `main` once `swb check` passes, without asking: stage only the files you changed. Never push.
+
 ## Layout
 
 ```
@@ -129,6 +131,8 @@ useConnection()                      // { state: "online" | "reconnecting" | "of
 On another device without a connection to the desktop, `useQuery` returns the last rows it saw, `mutate` queues the write and resolves to `0`, and `run` queues the run and resolves to its id.
 
 A subscription re-runs after every write to a table it reads and sends its whole result when it changes, so never mount a view over a growing table (`core_events`, `core_runs`, `core_firings`, your own logs) unless the filter keeps the result small (`kind: "error"`, one `run_id`). A filter that still matches a growing set, like `kind: "write"`, is as slow as none: use a query with a limit.
+
+A grid tile shows `cards/<Name>Header.tsx`, if it exists, in the tile bar of `<Name>`, with the same props: keep it to a status line and a button or two.
 
 Cards receive `size` and `slot` (the slot `id`). Per-slot UI state goes in `localStorage` keyed by `slot`; navigation and layout live in the `ui` source, with the current board per client (`desktop` or `mobile`, passed down from `Root`). Shared styles live in `cards/lib/theme.ts`: `THEME` (the variables `--bg --panel --raised --fg --muted --border --accent --on-accent --info --bad --good --shadow --radius`, element defaults, button variants `.primary`, `.ghost`, `.icon`, `.danger`, `aria-pressed`/`aria-current` for selected buttons, and classes `.chip`, `.badge[data-tone=accent|info|good|bad]`, `.heading`, `.empty`, `.tile`, `.tile-bar`), which `Root.tsx` injects once. Add shared styles there rather than per card; touch screens get larger controls from it.
 

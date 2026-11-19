@@ -1,26 +1,65 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react'
 import { mutate, run, useExpose, useQuery, type CardProps } from 'switchboard'
 import {
   BUBBLE,
   Bubble,
   busy,
   Composer,
+  containsMessage,
+  draftKey,
   DecisionPanel,
   hostName,
   interruptible,
+  MessageBox,
+  MODELS,
+  ModelSelect,
   outboxText,
   QUEUE_BUTTON,
   QueuedMessage,
+  Spinner,
   TONES,
+  useArchive,
+  useDraft,
   useOutbox,
-  withoutAttachments,
+  usePending,
+  setPending,
+  setDraft,
+  withAttachments,
   WAITING,
+  type Attachment,
+  type Outbox,
   type Session,
+  type Pending,
 } from './lib/sessions'
-import { useMobile } from './lib/theme'
-import { renderMarkdown } from './lib/markdown'
+import { useFindKey, useMobile } from './lib/theme'
+import { ArchiveIcon, BellIcon, Icon, TerminalIcon } from './lib/icons'
+import { copyCode, renderMarkdown } from './lib/markdown'
+import { Actions } from './lib/actions'
 
-type Message = { uuid: string; at: string; role: string; text: string; tokens: number | null }
+type Message = {
+  uuid: string
+  at: string
+  role: string
+  text: string
+  tokens: number | null
+  model: string | null
+  tool_id: string | null
+  tool_name: string | null
+  is_error: number | null
+}
+type Subagent = {
+  id: string
+  description: string | null
+  agent_type: string | null
+  background: number
+  activity: string | null
+  started_at: string | null
+  updated_at: string | null
+}
+
+const STALE_SUBAGENT = 30 * 60 * 1000
+const clip = (text: string | null, max: number) =>
+  text && text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text
 
 const SKILL = /^Base directory for this skill: .*\/([^/\n]+)$/m
 const TOOL_LINE: CSSProperties = {
@@ -30,121 +69,657 @@ const TOOL_LINE: CSSProperties = {
   fontSize: 12,
   whiteSpace: 'pre-wrap',
 }
-/** Claude Code logs each tool call (`→ Name input`) and result (`← output`) as a message of its own. */
-const isTool = (m: Message) => m.text.startsWith('→ ') || m.text.startsWith('← ')
-const DENIED = /^← (Permission for this \w+ was denied|The user doesn't want to proceed)/
-/** Denied calls and their results. Results arrive in call order, so the nth result answers the nth call. */
-const deniedTools = (group: Message[]) => {
-  const calls = group.filter(m => m.text.startsWith('→ '))
-  const results = group.filter(m => m.text.startsWith('← '))
-  return calls.flatMap((call, i) => (DENIED.test(results[i]?.text ?? '') ? [call.uuid, results[i].uuid] : []))
+const COMPACT: CSSProperties = { ...BUBBLE, background: 'color-mix(in srgb, #a78bfa 20%, transparent)' }
+const Working = ({ since, tokens, label }: { since?: string; tokens: number; label?: string }) => {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  const seconds = since ? Math.max(0, Math.round((now - Date.parse(since)) / 1000)) : 0
+  const elapsed = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+      <span className="typing">
+        <i />
+        <i />
+        <i />
+      </span>
+      <span className="ellipsis" style={{ minWidth: 0, color: 'var(--muted)', fontVariantNumeric: 'tabular-nums' }}>
+        {label && `${label} · `}
+        {elapsed}
+        {tokens > 0 && ` · ${tokens < 1000 ? tokens : `${(tokens / 1000).toFixed(1)}k`} tokens`}
+      </span>
+    </span>
+  )
 }
+/** Claude Code logs each tool call (`→ Name input`) and result (`← output`) as a message of its own. */
+const isTool = (m: Message) => !!m.tool_id
+const isCall = (m: Message) => !!m.tool_name
+/** `fn` of a message, computed once per distinct text, as a working session re-renders its transcript on every new line. */
+const byText = <T,>(fn: (m: Message) => T) => {
+  const cache = new Map<string, T>()
+  return (m: Message) => {
+    if (!cache.has(m.text)) {
+      if (cache.size > 5000) cache.clear()
+      cache.set(m.text, fn(m))
+    }
+    return cache.get(m.text)!
+  }
+}
+const DENIED = /^← (Permission for this \w+ was denied|The user doesn't want to proceed)/
+/** Each call with the result answering it. */
+const toolCalls = (group: Message[]) => {
+  const results = new Map(group.filter(m => !isCall(m)).map(m => [m.tool_id, m]))
+  return group.filter(isCall).map(call => [call, results.get(call.tool_id)] as [Message, Message | undefined])
+}
+const deniedTools = (group: Message[]) =>
+  toolCalls(group).flatMap(([call, result]) =>
+    result?.is_error && DENIED.test(result.text) ? [call.uuid, result.uuid] : [],
+  )
+const toolName = (call: Message) => call.tool_name?.split('__').pop()
+const WRITES = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']
+const toolInput = (call: Message) => call.text.slice(call.text.indexOf(' ', 2) + 1)
+const inputOf = (call: Message) => {
+  try {
+    return JSON.parse(toolInput(call))
+  } catch {
+    return null
+  }
+}
+const bashCommand = (call: Message): string => inputOf(call)?.command ?? toolInput(call)
+const HEREDOC = /^([^\n]*?)<<-?\s*['"]?(\w+)['"]?([^\n]*)\n([\s\S]*?)\n\2(?=\n|$)/gm
+const QUOTED = /'([^'\s<>|;&]+)'|'[^']*'|"((?:[^"\\\s<>|;&]|\\.)+)"|"(?:[^"\\]|\\.)*"/g
+const SHELL_TARGETS = [
+  /(?:^|[^>&0-9=-])>>?\s*(?!&)([^\s;&|)<>=][^\s;&|)<>]*)/g,
+  /\btee\s+(?:-a\s+)?([^\s;&|)]+)/g,
+  /\b(?:sed|perl)\s[^;&|\n]*?-\w*i\b[^;&|\n]*\s([^\s;&|]+)\s*(?=$|[;&|\n])/g,
+]
+const SCRATCH = /^(\/private)?\/tmp\/|^\/var\/folders\/|^\$\{?TMPDIR\b|^\$\{?CLAUDE_JOB_DIR\b|\/\.claude\/jobs\//
+const SCRIPT_WRITE = /open\([^)]*['"][wa]\+?['"]|\.write_text\(|writeFileSync\(/
+const SCRIPT_TARGET = /\b(?:(?:open|writeFileSync|Path)\(\s*|\w+\s*=\s*)['"]([\w.~\/-]*[/.][\w.~\/-]+)['"]/g
+const READERS = ['cat', 'head', 'tail', 'nl', 'less', 'more', 'bat', 'sed']
+/** A Bash command split into its shell text (heredoc bodies removed, with and without quoted strings) and heredocs. */
+const parseBash = (command: string) => {
+  const unquoted = command.replace(HEREDOC, '$1<<$2$3')
+  const shell = unquoted.replace(QUOTED, '$1$2').replace(/\(\([^)]*\)\)/g, '')
+  const cwd = shell.match(/^\s*cd\s+([^\s;&|]+)/)?.[1] ?? ''
+  const scratch = (path: string) => SCRATCH.test(/^[/~$]/.test(path) ? path : `${cwd}/${path}`)
+  const heredocs = [...command.matchAll(HEREDOC)].map(m => ({ opener: m[1] + m[3], body: m[4] }))
+  const inline = [...command.matchAll(/\b(?:python3?|node)\s+-[ce]\s+(['"])([\s\S]*?)\1/g)].map(m => m[2])
+  const scripts = [...heredocs.filter(h => !/\b(?:cat|tee)\b/.test(h.opener)).map(h => h.body), ...inline].join('\n')
+  return { unquoted, shell, scratch, heredocs, scripts }
+}
+/** Heuristic: redirects, tee and in-place edits outside heredocs, and scripts opening files for writing. */
+const bashTargets = (command: string) => {
+  const { shell, scratch, scripts } = parseBash(command)
+  const targets = SHELL_TARGETS.flatMap(re => [...shell.matchAll(re)].map(m => m[1])).filter(t => t !== '/dev/null')
+  const scripted = SCRIPT_WRITE.test(scripts) ? [...scripts.matchAll(SCRIPT_TARGET)].map(m => m[1]) : []
+  const paths = [...targets, ...scripted].filter(path => !scratch(path))
+  return { write: paths.length > 0 || (SCRIPT_WRITE.test(scripts) && !scripted.length), paths }
+}
+/** Commands made only of `cd` and file readers (`cat`, `head`, `sed -n`…), with the files they read. */
+const bashReads = (command: string) => {
+  const segments = parseBash(command)
+    .shell.split(/&&|\|\||[;|\n]/)
+    .map(s => s.trim().split(/\s+/))
+    .filter(s => s[0])
+  const reading = segments.every(
+    ([name, ...args]) => name === 'cd' || (READERS.includes(name) && !(name === 'sed' && !args.includes('-n'))),
+  )
+  const paths = segments
+    .filter(([name]) => name !== 'cd')
+    .flatMap(([, ...args]) => args.filter(arg => !/^-|[<>]|^\d/.test(arg) && /[./]/.test(arg)))
+  return reading && paths.length ? paths : null
+}
+const callKind = byText(call => {
+  const name = toolName(call)
+  if (WRITES.includes(name ?? '')) return 'write'
+  if (name === 'Read' || name === 'NotebookRead') return 'read'
+  if (name !== 'Bash') return 'tool'
+  const command = bashCommand(call)
+  return bashTargets(command).write ? 'write' : bashReads(command) ? 'read' : 'tool'
+})
+/** Each tool call and its result, by uuid, as a write, a read or another call. */
+const toolKinds = (group: Message[]) =>
+  toolCalls(group).flatMap(([call, result]) => {
+    const kind = callKind(call)
+    return [[call.uuid, kind], ...(result ? [[result.uuid, kind]] : [])] as [string, string][]
+  })
+const toolPaths = byText(call =>
+  toolName(call) !== 'Bash'
+    ? [inputOf(call)?.file_path ?? inputOf(call)?.notebook_path ?? '?']
+    : callKind(call) === 'read'
+      ? (bashReads(bashCommand(call)) ?? [])
+      : bashTargets(bashCommand(call)).paths,
+)
+const lines = (text: string, op: string) => (text ? text.split('\n').map(line => op + line) : [])
+const diffLines = (before: string, after: string) => {
+  const a = before.replace(/\n$/, '').split('\n')
+  const b = after.replace(/\n$/, '').split('\n')
+  let start = 0
+  while (start < a.length && start < b.length && a[start] === b[start]) start++
+  let end = 0
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++
+  return [
+    ...a.slice(0, start).map(line => ' ' + line),
+    ...a.slice(start, a.length - end).map(line => '-' + line),
+    ...b.slice(start, b.length - end).map(line => '+' + line),
+    ...a.slice(a.length - end).map(line => ' ' + line),
+  ]
+}
+const hunks = (diffs: string[][]) => (diffs.length ? diffs.flatMap((d, i) => [...(i ? [' ⋯'] : []), ...d]) : null)
+const ESCAPES: Record<string, string> = { n: '\n', t: '\t', '\\': '\\', "'": "'", '"': '"', '\n': '' }
+/** A Python string literal starting at `from`, ignoring leading whitespace. */
+const readLiteral = (src: string, from: number) => {
+  const open = src.slice(from).match(/^\s*(r?)('''|"""|'|")/)
+  if (!open) return null
+  let value = ''
+  for (let i = from + open[0].length; i < src.length; i++) {
+    if (src.startsWith(open[2], i)) return { value, end: i + open[2].length }
+    if (src[i] === '\n' && open[2].length === 1) return null
+    if (src[i] === '\\' && !open[1]) value += ESCAPES[src[++i]] ?? '\\' + src[i]
+    else value += src[i]
+  }
+  return null
+}
+const SED_D = /(['"])\/((?:\\.|[^/])*)\/d\1/g
+const ECHO = /\b(echo|printf)\s+(?:-\w+\s+)?(['"])((?:\\.|(?!\2).)*)\2\s*>>?\s*([^\s;&|]+)/g
+const SED_S = /(['"])(?:[\d,$]+|\/[^/]*\/)?s([^\w\s\\])((?:\\.|(?!\2).)*?)\2((?:\\.|(?!\2).)*?)\2[gIp0-9]*\1/g
+/** Best effort: `cat` heredocs, `echo`/`printf` redirects, `sed -i` substitutions and deletions, and Python replacements
+ * of literals (`.replace`, helpers defined in the script, and pair lists). */
+const bashDiff = (command: string) => {
+  const { unquoted, scratch, heredocs } = parseBash(command)
+  const echoes = [...unquoted.matchAll(ECHO)]
+    .filter(m => !scratch(m[4]) && m[4] !== '/dev/null')
+    .map(m => lines(m[1] === 'printf' ? m[3].replaceAll('\\n', '\n').replace(/\n$/, '') : m[3], '+'))
+  const unescape = (text: string) =>
+    text
+      .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+      .replace(/\\([^\w\s])/g, '$1')
+  const written = heredocs
+    .filter(h => /\bcat\b/.test(h.opener) && !scratch(h.opener.match(/>>?\s*['"]?([^\s'";&|]+)/)?.[1] ?? '/tmp/'))
+    .map(h => lines(h.body, '+'))
+  const seds = unquoted
+    .split('\n')
+    .filter(line => /\b(?:sed|perl)\s[^\n]*-\w*i\b/.test(line))
+    .flatMap(line => [
+      ...[...line.matchAll(SED_S)].map(m => diffLines(unescape(m[3]), unescape(m[4]))),
+      ...[...line.matchAll(SED_D)].map(m => ['-' + unescape(m[2])]),
+    ])
+  const replaces = heredocs
+    .filter(h => /\bpython3?\b/.test(h.opener))
+    .flatMap(({ body }) => {
+      const variables = new Map(
+        [...body.matchAll(/^(\w+)\s*=(?=\s*r?['"])/gm)].flatMap(m => {
+          const literal = readLiteral(body, m.index! + m[0].length)
+          return literal ? [[m[1], literal.value] as const] : []
+        }),
+      )
+      const argument = (from: number) => {
+        const name = body.slice(from).match(/^\s*(\w+)\s*(?=[,)])/)
+        return name && variables.has(name[1])
+          ? { value: variables.get(name[1])!, end: from + name[0].length }
+          : readLiteral(body, from)
+      }
+      const pair = (from: number) => {
+        const before = argument(from)
+        const comma = before && body.slice(before.end).match(/^\s*,/)
+        const after = before && comma && argument(before.end + comma[0].length)
+        return after ? [diffLines(before.value, after.value)] : []
+      }
+      const helpers = [...body.matchAll(/^def (\w+)\(/gm)].map(m => m[1])
+      const calls = helpers.length ? new RegExp(`(?:\\.replace|\\b(?:${helpers.join('|')}))\\(`, 'g') : /\.replace\(/g
+      const tuples = /[[,(]\s*\((?=\s*r?['"])/g
+      return [...body.matchAll(calls), ...body.matchAll(tuples)].flatMap(m => pair(m.index! + m[0].length))
+    })
+  return hunks([...written, ...echoes, ...seds, ...replaces])
+}
+/** Write inputs are logged in full, so they parse unless the transcript was cached before they were. */
+const writeDiff = byText(call => {
+  try {
+    if (toolName(call) === 'Bash') return bashDiff(bashCommand(call))
+    const input = JSON.parse(toolInput(call))
+    if (input.edits)
+      return hunks(
+        input.edits.map((e: { old_string: string; new_string: string }) => diffLines(e.old_string, e.new_string)),
+      )
+    if ('old_string' in input) return diffLines(input.old_string, input.new_string)
+    return lines(input.content ?? input.new_source ?? '', '+')
+  } catch {
+    return null
+  }
+})
 const DENIED_MARK = <span style={{ color: 'var(--bad)', fontWeight: 700 }}>✗ </span>
 const toolSummary = (group: Message[]) => {
-  const names = group.filter(m => m.text.startsWith('→ ')).map(m => m.text.slice(2).split(/\s/)[0].split('__').pop())
+  const names = group.filter(isCall).map(call => {
+    const skill = toolName(call) === 'Skill' && inputOf(call)?.skill
+    return skill ? `Skill ${skill}` : toolName(call)
+  })
   if (names.length === 0) return 'Tool results'
   return `${names.length} tool call${names.length === 1 ? '' : 's'} · ${[...new Set(names)].join(', ')}`
 }
-const HEADER: CSSProperties = {
-  ...BUBBLE,
-  flexShrink: 0,
-  position: 'relative',
-  zIndex: 1,
-  background: 'var(--bg)',
-  borderBottom: '1px solid var(--border)',
-  boxShadow: 'var(--shadow)',
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: '4px 8px',
-  alignItems: 'center',
-}
-const ELLIPSIS: CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 
 /**
- * One session's latest messages, loaded on mount (`sessions.transcript`) and followed until unmount: where the session
+ * One session's latest messages, loaded on mount (`sessions.transcript`) and followed until archived: where the session
  * runs (a link that opens it there with `sessions.open`, desktop only), then its pending decision and a message box
- * pinned to the bottom.
+ * pinned to the bottom. Without a session, a new chat.
  */
-export default function Transcript({ session, limit = 1000 }: CardProps<{ session?: string; limit?: number }>) {
-  if (!session) return <div className="empty">Open a transcript from the Sessions card</div>
-  return <SessionTranscript id={session} limit={limit} />
+export default function Transcript({ session }: CardProps<{ session?: string | null }>) {
+  if (!session) return <NewChat />
+  return <SessionTranscript key={session} id={session} />
 }
 
-function SessionTranscript({ id, limit }: { id: string; limit: number }) {
-  const session = useQuery<Session>('sessions_items', { id })?.[0]
-  const messages = useQuery<Message>('sessions.transcript', { session: id, limit }) ?? []
+type Run = { state: string; summary: string | null }
+
+type ChatLink = { ref: string; kind: string; label: string | null }
+
+const tilde = (path: string) => path.replace(/^\/(Users|home)\/[^/]+/, '~')
+const short = (path: string) => tilde(path).replace(/^~\/Documents\//, '')
+
+/**
+ * A blank chat: its first message starts a session (`sessions.start`) in the folder above the box (by default the most
+ * recent session's), and the chat board then follows that session.
+ */
+function NewChat() {
+  const client = useMobile() ? 'mobile' : 'desktop'
+  const [prompt, setPrompt] = useDraft('NewChat.prompt')
+  const [, setFiles] = useDraft('NewChat.files')
+  const [todo, setTodo] = useDraft('NewChat.todo')
+  const [pinned, setPinned] = useDraft('NewChat.cwd')
+  const [model, setModel] = useDraft('NewChat.model')
+  const [linksDraft, setLinks] = useDraft('NewChat.links')
+  const links: ChatLink[] = linksDraft ? JSON.parse(linksDraft) : []
+  const linked = useQuery<{ title: string }>('workstreams_items', { id: Number(todo) || 0 })?.[0]
+  const latest = useQuery<Session>('sessions.recent', { limit: 1, hidden: 0 })?.[0]?.cwd
+  const cwd = pinned ? pinned.trim() : latest ? short(latest) : ''
+  const [runId, setRunId] = useState<string>()
   const [error, setError] = useState('')
-  const mobile = useMobile()
-  const scroller = useRef<HTMLDivElement>(null)
-  const initial = useRef<Set<string> | null>(null)
-  const working = !!session && busy(session)
-  useExpose({ stoppable: working && session.kind === 'background' ? id : undefined })
-  const scrollToEnd = () => scroller.current?.scrollTo({ top: 0 })
-  const shown = useRef(new Set<string>())
-  const grows = useRef(new Map<string, boolean>())
-  const entries = useOutbox(id)
-  const sending = entries
-    .filter(e => e.state === 'sending')
-    .map(e => ({ text: outboxText(e), sent: e.acked || e.sent_at, entry: e }))
-    .filter(
-      ({ text }) =>
-        !messages.some(m => m.role === 'user' && withoutAttachments(m.text).startsWith(withoutAttachments(text))),
-    )
-  for (const { text } of sending) if (!grows.current.has(text)) grows.current.set(text, !shown.current.has(text))
+  const started = useQuery<Run>('core_runs', { id: runId ?? '' })?.[0]
+  const shortId = started?.state === 'success' ? started.summary?.match(/^started (\w+)/)?.[1] : undefined
+  const session = useQuery<Session>('sessions_items', { short_id: shortId ?? '' })?.[0]
+  const queued = !!runId && !started && !navigator.onLine
 
   useEffect(() => {
-    for (const entry of entries) shown.current.add(outboxText(entry))
+    if (started?.state !== 'failure') return
+    setError(started.summary ?? 'Could not start the chat')
+    setRunId(undefined)
+  }, [started?.state])
+
+  useEffect(() => {
+    if (!session && !queued) return
+    setPrompt('')
+    setFiles('')
+    setPinned('')
+    setLinks('')
+    if (!session) return
+    if (todo) {
+      mutate('workstreams.link_add', {
+        item: Number(todo),
+        ref: `sessions:${session.id}`,
+        kind: 'session',
+        label: '',
+      }).catch(console.error)
+      setTodo('')
+    }
+    mutate('ui.open_chat', { client, session: session.id }).catch((e: Error) => setError(e.message))
+  }, [session?.id, queued])
+
+  const dirty = !!(prompt || links.length || todo)
+  const clear = () => {
+    setPrompt('')
+    setFiles('')
+    setLinks('')
+    setTodo('')
+  }
+
+  const start = (prompt: string, files: Attachment[]) => {
+    if (!prompt || runId) return
+    setError('')
+    const full = links.length
+      ? `${prompt}\n\nLinks:\n${links.map(l => `- ${l.label ?? l.kind}: ${l.ref}`).join('\n')}`
+      : prompt
+    run('sessions.start', {
+      ...withAttachments('prompt', full, files),
+      cwd: cwd.trim(),
+      model: MODELS[model] ?? MODELS.opus,
+      origin: 'me',
+    }).then(setRunId, (e: Error) => setError(e.message))
+  }
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'flex-end',
+        flex: 1,
+        minHeight: 0,
+        background: 'var(--panel)',
+      }}
+    >
+      {error && <div style={{ ...BUBBLE, color: 'var(--bad)' }}>{error}</div>}
+      {queued && <div className="empty">Queued: the chat appears in the sidebar once it starts</div>}
+      <div className="composer-footer">
+        {(linked || links.length > 0) && (
+          <div className="todo-chips" style={{ marginBottom: 6 }}>
+            {linked && (
+              <span className="badge" data-tone="accent" title="Sending links this chat to the to-do">
+                To-do: {linked.title}
+                <button title="Don't link to the to-do" onClick={() => setTodo('')}>
+                  ×
+                </button>
+              </span>
+            )}
+            {links.map(l => (
+              <span key={l.ref} className="badge" title={l.ref}>
+                {l.label ?? l.kind}
+                <button
+                  title="Leave out of the message"
+                  onClick={() => setLinks(JSON.stringify(links.filter(o => o.ref !== l.ref)))}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="chat-options">
+          <FolderPicker value={cwd} onChange={next => setPinned(next || ' ')} />
+          <ModelSelect value={model || 'opus'} onChange={setModel} />
+          <button
+            type="button"
+            className="ghost icon round"
+            title="Clear the message, files and links (Esc)"
+            aria-label="Clear"
+            style={{ visibility: dirty ? undefined : 'hidden' }}
+            onClick={clear}
+          >
+            ✕
+          </button>
+        </div>
+        <MessageBox
+          draft="NewChat.prompt"
+          files="NewChat.files"
+          placeholder={cwd.trim() ? 'Ask Claude' : 'Ask Claude to change this app'}
+          onSend={start}
+          onError={setError}
+          button={runId && !queued ? <Spinner /> : undefined}
+          onKeyDown={e => {
+            if (e.key !== 'Escape' || !dirty) return
+            e.preventDefault()
+            clear()
+          }}
+        />
+      </div>
+    </div>
+  )
+}
+
+/** The new chat's folder: on focus, lists recently used folders, filtered by what is typed since. */
+function FolderPicker({ value, onChange }: { value: string; onChange: (cwd: string) => void }) {
+  const folders = useQuery<{ cwd: string }>('sessions.folders', { limit: 50 }) ?? []
+  const [filter, setFilter] = useState<string>()
+  const [active, setActive] = useState(0)
+  const needle = filter?.trim().toLowerCase() ?? ''
+  const matches = folders.map(f => short(f.cwd)).filter(f => f.toLowerCase().includes(needle))
+  const open = filter !== undefined && matches.length > 0
+  const pick = (cwd: string) => {
+    onChange(cwd)
+    setFilter(undefined)
+  }
+
+  return (
+    <div className="folder-picker">
+      <input
+        value={value}
+        onFocus={e => {
+          e.currentTarget.select()
+          setFilter('')
+          setActive(0)
+        }}
+        onBlur={() => setFilter(undefined)}
+        onChange={e => {
+          onChange(e.target.value)
+          setFilter(e.target.value)
+          setActive(0)
+        }}
+        onKeyDown={e => {
+          if (!open) return
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault()
+            setActive(i => (i + (e.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length)
+          } else if (e.key === 'Enter') {
+            e.preventDefault()
+            pick(matches[Math.min(active, matches.length - 1)])
+          } else if (e.key === 'Escape') {
+            e.stopPropagation()
+            setFilter(undefined)
+          }
+        }}
+        placeholder="Folder (empty: this app)"
+        aria-label="Folder"
+        role="combobox"
+        aria-expanded={open}
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+      />
+      {open && (
+        <div className="folder-list" role="listbox">
+          {matches.map((cwd, i) => (
+            <button
+              key={cwd}
+              role="option"
+              aria-selected={i === active}
+              title={cwd}
+              onMouseDown={e => e.preventDefault()}
+              onMouseEnter={() => setActive(i)}
+              onClick={() => pick(cwd)}
+            >
+              {cwd}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const CLOCK_SKEW = 5000
+const PAGE = 500
+const PREFETCH_SCREENS = 1.5
+const AWAY_FROM_END = 300
+const FOLLOW_WITHIN = 48
+
+function SessionTranscript({ id }: { id: string }) {
+  const row = useQuery<Session>('sessions_items', { id })?.[0]
+  const loading = !row
+  const session: Session = row ?? {
+    id,
+    title: '',
+    status: '',
+    cwd: null,
+    host: null,
+    kind: null,
+    short_id: null,
+    live: 0,
+    last_message: null,
+    last_prompt: null,
+    decision: null,
+    updated: '',
+    hidden: 0,
+  }
+  const todos =
+    useQuery<{ item: number; item_title: string; item_done: number; item_list: string }>('workstreams_links', {
+      ref: `sessions:${id}`,
+    }) ?? []
+  const [limit, setLimit] = useState(PAGE)
+  const [away, setAway] = useState(false)
+  const rows = useQuery<Message>('sessions.transcript', { session: id, limit })
+  const loaded = useRef<Message[]>([])
+  if (rows) loaded.current = rows
+  const messages = loaded.current
+  const subagents = (useQuery<Subagent>('sessions_subagents', { session: id, done: 0 }) ?? []).filter(
+    a => (a.background || busy(session)) && Date.now() - Date.parse(a.updated_at ?? '') < STALE_SUBAGENT,
+  )
+  const [error, setError] = useState('')
+  const [searching, setSearching] = useState(false)
+  const watching = !!useQuery<{ done: number; sticky: number }>('sessions_watches', { session: id })?.some(
+    w => w.sticky || !w.done,
+  )
+  const mobile = useMobile()
+  const scroller = useRef<HTMLDivElement>(null)
+  const card = useRef<HTMLDivElement>(null)
+  useFindKey(card, () => {
+    setSearching(true)
+    requestAnimationFrame(() => card.current?.querySelector<HTMLInputElement>('.transcript-search input')?.select())
+  })
+  const working = busy(session)
+  useExpose({ stoppable: working && session.kind === 'background' ? id : undefined })
+  const scrollToEnd = () => requestAnimationFrame(() => scroller.current?.scrollTo({ top: 0, behavior: 'smooth' }))
+  const hasMessages = messages.length > 0
+  useEffect(() => {
+    const list = scroller.current?.firstElementChild
+    if (!list) return
+    const follow = new ResizeObserver(() => {
+      const el = scroller.current
+      if (el && el.scrollTop < 0 && el.scrollTop > -FOLLOW_WITHIN) el.scrollTop = 0
+    })
+    follow.observe(list)
+    return () => follow.disconnect()
+  }, [hasMessages])
+  const entries = useOutbox(id)
+  const pending = usePending(id)
+  const echoed = ({ text, at }: Pending) =>
+    messages.some(m => m.role === 'user' && Date.parse(m.at) >= at - CLOCK_SKEW && containsMessage(m.text, text))
+  const outboxed = (state: (s: Outbox['state']) => boolean, { text, at }: Pending) =>
+    entries.find(e => state(e.state) && e.queued_at >= at - CLOCK_SKEW && containsMessage(outboxText(e), text))
+  const sending = pending.filter(p => !echoed(p) && !outboxed(s => s !== 'sending', p))
+  const compacting = sending.find(p => /^\/compact\b/.test(p.text.trim()))
+
+  useEffect(() => {
+    setPending(id, sends => {
+      const kept = sends.filter(p => !echoed(p))
+      const added = entries
+        .filter(e => e.state === 'sending' && !kept.some(p => containsMessage(outboxText(e), p.text)))
+        .map(e => ({ text: outboxText(e), at: e.queued_at }))
+        .filter(p => !echoed(p))
+      return kept.length === sends.length && !added.length ? sends : [...kept, ...added]
+    })
   })
 
   useEffect(() => {
-    scrollToEnd()
-  }, [
-    messages.findLast(m => m.role === 'user' && !isTool(m))?.uuid,
-    entries.find(e => e.state !== 'sending')?.queued_at,
-  ])
+    if (!loading) mutate('sessions.seen', { session: id }).catch(console.error)
+  }, [id, loading, session.updated])
 
+  const uncached = useQuery('sessions_transcripts', { session: id })?.length === 0
   useEffect(() => {
-    run('sessions.transcript', { session: id }).catch((e: Error) => setError(e.message))
-    return () => void mutate('sessions.transcript_close', { session: id })
-  }, [id])
+    if (uncached) run('sessions.transcript', { session: id }).catch((e: Error) => setError(e.message))
+  }, [id, uncached])
 
-  if (!initial.current && messages.length) initial.current = new Set(messages.map(m => m.uuid))
-  if (!session) return <div className="empty">Loading session…</div>
-  const groups = messages.reduce<(Message | Message[])[]>((all, m) => {
-    const last = all.at(-1)
-    if (!isTool(m)) all.push(m)
-    else if (Array.isArray(last)) last.push(m)
-    else all.push([m])
-    return all
-  }, [])
-  const denied = new Set(groups.flatMap(group => (Array.isArray(group) ? deniedTools(group) : [])))
-  const shownGroups = groups.flatMap<Message | Message[]>(group =>
-    Array.isArray(group)
-      ? group.reduce<Message[][]>((runs, m) => {
-          const run = runs.at(-1)
-          if (run && denied.has(run[0].uuid) === denied.has(m.uuid)) run.push(m)
-          else runs.push([m])
-          return runs
-        }, [])
-      : [group],
+  const { denied, kinds, shownGroups } = useMemo(() => {
+    const groups = messages.reduce<(Message | Message[])[]>((all, m) => {
+      const last = all.at(-1)
+      const loadedSkill = m.role === 'skill' || (m.role === 'user' && SKILL.test(m.text))
+      if (Array.isArray(last) && (isTool(m) || (loadedSkill && last.some(c => toolName(c) === 'Skill')))) last.push(m)
+      else if (!isTool(m)) all.push(m)
+      else all.push([m])
+      return all
+    }, [])
+    const denied = new Set(groups.flatMap(group => (Array.isArray(group) ? deniedTools(group) : [])))
+    const kinds = new Map(groups.flatMap(group => (Array.isArray(group) ? toolKinds(group) : [])))
+    const kind = (m: Message) => `${denied.has(m.uuid)}:${kinds.get(m.uuid) ?? 'tool'}`
+    const callOf = new Map(
+      groups.flatMap(group =>
+        Array.isArray(group) ? toolCalls(group).flatMap(([call, result]) => (result ? [[result.uuid, call]] : [])) : [],
+      ),
+    )
+    const shownGroups = groups.flatMap<Message | Message[]>(group =>
+      Array.isArray(group)
+        ? group.reduce<Message[][]>((runs, m) => {
+            const run = runs.at(-1)
+            const call = callOf.get(m.uuid)
+            const callRun = call && runs.find(r => r.includes(call))
+            if (callRun) callRun.push(m)
+            else if (run && kind(run[0]) === kind(m)) run.push(m)
+            else runs.push([m])
+            return runs
+          }, [])
+        : [group],
+    )
+    return { denied, kinds, shownGroups }
+  }, [messages])
+  const shortPaths = (calls: Message[]) =>
+    [...new Set(calls.flatMap(toolPaths).map(p => tilde(p.replace(`${session.cwd}/`, ''))))].join(', ')
+  const newest = shownGroups.at(-1)
+  const newestKey = newest && (Array.isArray(newest) ? newest[0].uuid : newest.uuid)
+  const shownKeys = useRef<Set<string> | undefined>(undefined)
+  const grown = useRef(new Set<string>())
+  if (
+    newestKey &&
+    shownKeys.current &&
+    !shownKeys.current.has(newestKey) &&
+    (Array.isArray(newest) || newest.role !== 'user')
   )
+    grown.current.add(newestKey)
+  useEffect(() => {
+    if (messages.length) shownKeys.current = new Set(shownGroups.map(g => (Array.isArray(g) ? g[0].uuid : g.uuid)))
+  }, [shownGroups])
   const last = messages.at(-1)
-  const typing = working && !(last?.role === 'assistant' && !isTool(last))
+  const typing = working && !compacting && !(last?.role === 'assistant' && !isTool(last))
+  const lastVisible = messages.findLast(m => !isTool(m) && m.role !== 'thinking')
+  const visibleAt = lastVisible ? messages.indexOf(lastVisible) : -1
+  const context = messages.findLast(m => m.tokens)?.tokens ?? 0
+  const baseline =
+    lastVisible?.tokens ??
+    messages.slice(0, visibleAt).findLast(m => m.tokens)?.tokens ??
+    messages.slice(visibleAt + 1).find(m => m.tokens)?.tokens ??
+    context
+  const spent = context - baseline
   const decision = session.decision && WAITING.includes(session.status) ? JSON.parse(session.decision) : null
   const fail = (e: Error) => setError(e.message)
-  const folder = session.cwd?.replace(/^\/(Users|home)\/[^/]+/, '~') ?? ''
+  const folder = session.cwd ? short(session.cwd) : ''
+  const model = (session.model ?? messages.findLast(m => m.model)?.model)?.match(/opus|sonnet|haiku|fable/)?.[0]
+  const client = mobile ? 'mobile' : 'desktop'
+  const archive = useArchive(client)
+  const toggleArchived = () => (session.hidden ? mutate('sessions.unhide', { id }) : archive(id, true)).catch(fail)
+  const editable = !session.live || session.kind === 'background'
+  const firstPrompt = messages.find(m => m.role === 'user')?.uuid
+  const edit = ({ uuid, text }: Message) =>
+    mutate('sessions.rewind', { session: id, uuid })
+      .then(() => {
+        setDraft(draftKey(id), text)
+        requestAnimationFrame(() => {
+          const box = scroller.current?.parentElement?.querySelector<HTMLTextAreaElement>('.composer-footer textarea')
+          box?.focus()
+          box?.setSelectionRange(text.length, text.length)
+        })
+        if (working) return run('sessions.stop', { session: id })
+      })
+      .catch(fail)
+  const toggleWatching = () => mutate(watching ? 'sessions.unwatch' : 'sessions.watch', { session: id }).catch(fail)
+  const openTerminal = (command = '') => {
+    const name = `chat-${id.slice(0, 8)}`
+    run('term.open', { name, cwd: session.cwd ?? '', chat: id, command }).catch(fail)
+    mutate('ui.open_terminal', { client, name }).catch(fail)
+  }
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'var(--panel)' }}>
-      <div style={HEADER}>
+    <div
+      ref={card}
+      style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'var(--panel)' }}
+    >
+      <div className="board-header">
         <div style={{ flex: '1 1 200px', minWidth: 0 }}>
           <input
             key={session.title}
             defaultValue={session.title}
-            placeholder="Title (empty restores the default)"
+            placeholder={loading ? undefined : 'Title (empty restores the default)'}
             aria-label="Session title"
             title="Rename"
-            className="inline-edit"
-            style={{ ...ELLIPSIS, display: 'block', width: '100%', fontWeight: 600 }}
+            className="inline-edit ellipsis"
+            style={{ display: 'block', width: '100%', fontWeight: 600 }}
             onKeyDown={e => {
               if (e.key === 'Enter') e.currentTarget.blur()
               if (e.key === 'Escape') {
@@ -158,22 +733,30 @@ function SessionTranscript({ id, limit }: { id: string; limit: number }) {
                 mutate('sessions.rename', { id, title: e.currentTarget.value }).catch(fail)
             }}
           />
-          <div style={{ ...ELLIPSIS, color: 'var(--muted)', fontSize: 12 }} title={session.cwd ?? undefined}>
-            {mobile ? (
-              hostName(session)
-            ) : (
-              <a
-                href="#"
-                title={session.kind === 'background' ? 'Open in a terminal' : `Open in ${hostName(session)}`}
-                onClick={e => {
-                  e.preventDefault()
-                  run('sessions.open', { session: id }).catch(fail)
-                }}
-              >
-                {hostName(session)}
-              </a>
-            )}{' '}
-            ·{' '}
+          <div
+            className="ellipsis"
+            style={{ color: 'var(--muted)', fontSize: 12, visibility: loading ? 'hidden' : undefined }}
+            title={session.cwd ?? undefined}
+          >
+            {!['switchboard', 'dev.switchboard.app'].includes(session.host ?? '') && (
+              <>
+                {mobile ? (
+                  hostName(session)
+                ) : (
+                  <a
+                    href="#"
+                    title={session.kind === 'background' ? 'Open in a terminal' : `Open in ${hostName(session)}`}
+                    onClick={e => {
+                      e.preventDefault()
+                      run('sessions.open', { session: id }).catch(fail)
+                    }}
+                  >
+                    {hostName(session)}
+                  </a>
+                )}{' '}
+                ·{' '}
+              </>
+            )}
             <input
               key={folder}
               defaultValue={folder}
@@ -201,48 +784,146 @@ function SessionTranscript({ id, limit }: { id: string; limit: number }) {
               }}
             />{' '}
             ·{' '}
-            <a
-              href="#"
-              title={id}
-              onClick={e => {
-                e.preventDefault()
-                navigator.clipboard.writeText(id).catch(fail)
-              }}
-            >
-              Copy id
-            </a>
+            <ModelSelect
+              className="inline-edit"
+              value={model}
+              disabled={!!session.live && session.kind !== 'background'}
+              onChange={(_, next) => mutate('sessions.model_set', { session: id, model: next }).catch(fail)}
+            />
           </div>
         </div>
-        <span className="badge" data-tone={TONES[session.status]}>
+        <span
+          className="badge"
+          data-tone={TONES[session.status]}
+          style={{ visibility: loading ? 'hidden' : undefined }}
+        >
           {session.status.replace('_', ' ')}
         </span>
+        {todos.map(t => (
+          <button
+            key={t.item}
+            className="badge"
+            title={t.item_list === 'projects' ? 'Open the project' : 'Open the to-do list'}
+            style={{ minHeight: 0, textDecoration: t.item_done ? 'line-through' : undefined }}
+            onClick={() => {
+              const client = mobile ? 'mobile' : 'desktop'
+              const opened =
+                t.item_list === 'projects'
+                  ? mutate('ui.open_project', { client, project: t.item })
+                  : mutate('ui.set_board', { client, id: 'main' })
+              opened.catch(fail)
+            }}
+          >
+            {t.item_list === 'projects' ? '◆' : '☐'} {t.item_title}
+          </button>
+        ))}
+        <Actions
+          actions={[
+            !loading && {
+              label: 'Search this chat (⌘F)',
+              text: 'Search',
+              icon: <Icon name="search" size={14} />,
+              pressed: searching,
+              onClick: () => setSearching(!searching),
+            },
+            !loading && {
+              label: 'Terminal in this folder',
+              text: 'Terminal',
+              icon: <TerminalIcon />,
+              onClick: () => openTerminal(),
+            },
+            !loading && {
+              label: session.hidden ? 'Unarchive' : 'Archive',
+              icon: <ArchiveIcon unarchive={!!session.hidden} />,
+              onClick: toggleArchived,
+            },
+            !loading && {
+              label: watching ? 'Notifying after every turn' : 'Notify me after every turn',
+              text: watching ? 'Stop notifying' : 'Notify me after every turn',
+              icon: <BellIcon off={!watching} />,
+              pressed: watching,
+              onClick: toggleWatching,
+            },
+            { label: 'Copy id', onClick: () => navigator.clipboard.writeText(id).catch(fail) },
+            { label: 'Reload transcript', onClick: () => run('sessions.transcript', { session: id }).catch(fail) },
+          ]}
+        />
       </div>
-      <div
-        ref={scroller}
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflow: 'auto',
-          overscrollBehavior: 'contain',
-          display: 'flex',
-          flexDirection: 'column-reverse',
-        }}
-      >
-        <div>
-          {error && <div style={{ ...BUBBLE, color: 'var(--bad)' }}>{error}</div>}
-          {shownGroups.map(group => {
-            const uuid = Array.isArray(group) ? group[0].uuid : group.uuid
-            const seen =
-              initial.current?.has(uuid) ||
-              (!Array.isArray(group) &&
-                group.role === 'user' &&
-                [...shown.current].some(prompt =>
-                  withoutAttachments(group.text).startsWith(withoutAttachments(prompt)),
-                ))
-            return (
-              <div key={uuid} className={seen ? undefined : 'grow'}>
-                <div>
-                  {Array.isArray(group) ? (
+      {searching && <TranscriptSearch root={scroller} messages={messages} onClose={() => setSearching(false)} />}
+      <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <div
+          ref={scroller}
+          onScroll={e => {
+            const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
+            setAway(scrollTop < -AWAY_FROM_END)
+            if (
+              rows &&
+              rows.length >= limit &&
+              scrollHeight - clientHeight + scrollTop < clientHeight * PREFETCH_SCREENS
+            )
+              setLimit(limit + PAGE)
+          }}
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflow: 'auto',
+            overscrollBehavior: 'contain',
+            display: 'flex',
+            flexDirection: 'column-reverse',
+          }}
+        >
+          <div key={messages.length ? 'loaded' : 'loading'} className={messages.length ? 'fade-in' : undefined}>
+            {error && <div style={{ ...BUBBLE, color: 'var(--bad)' }}>{error}</div>}
+            {shownGroups.map(group => {
+              const uuid = Array.isArray(group) ? group[0].uuid : group.uuid
+              const groupKind = Array.isArray(group) && kinds.get(uuid)
+              const calls = Array.isArray(group) ? group.filter(isCall) : []
+              const count = (noun: string) => `${calls.length} ${noun}${calls.length === 1 ? '' : 's'}`
+              return (
+                <div
+                  key={uuid}
+                  className={
+                    grown.current.has(uuid)
+                      ? !Array.isArray(group) && group.role === 'assistant'
+                        ? 'transcript-item grow slow'
+                        : 'transcript-item grow'
+                      : 'transcript-item'
+                  }
+                >
+                  {Array.isArray(group) && groupKind === 'read' ? (
+                    <div style={{ ...BUBBLE, color: 'var(--muted)', fontSize: 12 }}>
+                      {denied.has(uuid) && DENIED_MARK}
+                      {count('read')} · {shortPaths(calls)}
+                    </div>
+                  ) : Array.isArray(group) && groupKind === 'write' ? (
+                    <details style={BUBBLE}>
+                      <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
+                        {denied.has(uuid) && DENIED_MARK}
+                        {count('write')}
+                        {shortPaths(calls) && ` · ${shortPaths(calls)}`}
+                      </summary>
+                      {group.map(m => {
+                        const diff = isCall(m) && writeDiff(m)
+                        if (!isCall(m) && !denied.has(m.uuid) && !m.is_error) return null
+                        return diff ? (
+                          <div key={m.uuid}>
+                            <div style={TOOL_LINE}>{shortPaths([m])}</div>
+                            <div className="diff">
+                              {diff.map((line, i) => (
+                                <div key={i} data-op={line[0]}>
+                                  {line}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <div key={m.uuid} style={TOOL_LINE}>
+                            {toolName(m) === 'Bash' ? `$ ${bashCommand(m)}` : m.text}
+                          </div>
+                        )
+                      })}
+                    </details>
+                  ) : Array.isArray(group) ? (
                     <details style={BUBBLE}>
                       <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
                         {denied.has(group[0].uuid) && DENIED_MARK}
@@ -250,7 +931,7 @@ function SessionTranscript({ id, limit }: { id: string; limit: number }) {
                       </summary>
                       {group.map(m => (
                         <div key={m.uuid} style={TOOL_LINE}>
-                          {denied.has(m.uuid) && m.text.startsWith('→ ') && DENIED_MARK}
+                          {denied.has(m.uuid) && isCall(m) && DENIED_MARK}
                           {m.text}
                         </div>
                       ))}
@@ -260,7 +941,11 @@ function SessionTranscript({ id, limit }: { id: string; limit: number }) {
                       <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
                         {group.role === 'subagent' ? 'Subagent returned' : 'Message from another agent'}
                       </summary>
-                      <div className="message" dangerouslySetInnerHTML={{ __html: renderMarkdown(group.text) }} />
+                      <div
+                        className="message"
+                        onClick={copyCode}
+                        dangerouslySetInnerHTML={{ __html: renderMarkdown(group.text) }}
+                      />
                     </details>
                   ) : group.role === 'notification' ? (
                     <details style={BUBBLE}>
@@ -269,6 +954,19 @@ function SessionTranscript({ id, limit }: { id: string; limit: number }) {
                       </summary>
                       <div style={TOOL_LINE}>{group.text}</div>
                     </details>
+                  ) : group.role === 'thinking' ? (
+                    <div style={{ ...BUBBLE, color: 'var(--muted)', fontSize: 12, fontStyle: 'italic' }}>
+                      {Number(group.text) ? `Thought for ${group.text} tokens` : 'Thought'}
+                    </div>
+                  ) : group.role === 'compact' ? (
+                    <details style={COMPACT}>
+                      <summary style={{ cursor: 'pointer', color: '#a78bfa', fontSize: 12 }}>Context compacted</summary>
+                      <div
+                        className="message"
+                        onClick={copyCode}
+                        dangerouslySetInnerHTML={{ __html: renderMarkdown(group.text) }}
+                      />
+                    </details>
                   ) : group.role === 'command' ? (
                     <details style={BUBBLE}>
                       <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
@@ -276,34 +974,69 @@ function SessionTranscript({ id, limit }: { id: string; limit: number }) {
                       </summary>
                       <div style={TOOL_LINE}>{group.text}</div>
                     </details>
-                  ) : group.role === 'user' && SKILL.test(group.text) ? (
+                  ) : group.role === 'skill' || (group.role === 'user' && SKILL.test(group.text)) ? (
                     <details style={BUBBLE}>
                       <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
-                        Skill loaded · {group.text.match(SKILL)![1]}
+                        Skill loaded{SKILL.test(group.text) && ` · ${group.text.match(SKILL)![1]}`}
                       </summary>
                       <div style={TOOL_LINE}>{group.text}</div>
                     </details>
                   ) : (
                     <Bubble
                       role={group.role}
-                      label={`${new Date(group.at).toLocaleTimeString()}${group.tokens ? ` · ${Math.round(group.tokens / 1000)}k context` : ''}`}
+                      label={`${new Date(group.at).toLocaleTimeString()}${group.tokens ? ` · ${Math.round(group.tokens / 1000)}k` : ''}`}
                       text={group.text}
+                      onRunCode={mobile ? undefined : openTerminal}
+                      action={
+                        group.role === 'user' &&
+                        editable &&
+                        group.uuid !== firstPrompt && (
+                          <button
+                            type="button"
+                            className="ghost icon small"
+                            title="Edit this message, dropping it and everything after it (Esc in the message box cancels)"
+                            aria-label="Edit"
+                            onClick={() => edit(group)}
+                          >
+                            <Icon name="pencil" />
+                          </button>
+                        )
+                      }
                     />
                   )}
                 </div>
-              </div>
-            )
-          })}
-          {sending.map(({ text, sent, entry }) => (
-            <div key={text} className={grows.current.get(text) ? 'grow' : undefined}>
+              )
+            })}
+            <div className="collapse" data-open={typing || undefined}>
               <div>
-                {interruptible(session, entry) ? (
-                  <Bubble
-                    role="user"
-                    label="Waiting for Claude to pause"
-                    text={text}
-                    faded
-                    action={
+                <div style={BUBBLE}>
+                  <Working since={lastVisible?.at} tokens={spent} />
+                </div>
+              </div>
+            </div>
+            {subagents.map(a => (
+              <div key={a.id} className="fade-in ellipsis" style={BUBBLE} title={a.activity ?? undefined}>
+                <Working
+                  since={a.started_at ?? undefined}
+                  tokens={0}
+                  label={[a.description ?? a.agent_type ?? 'Subagent', clip(a.activity, 70)]
+                    .filter(Boolean)
+                    .join(' · ')}
+                />
+              </div>
+            ))}
+            {sending.map(p => {
+              const entry = outboxed(s => s === 'sending', p)
+              return (
+                <Bubble
+                  key={`${p.at}:${p.text}`}
+                  role="user"
+                  label="Sending"
+                  text={p.text}
+                  faded
+                  action={
+                    entry &&
+                    interruptible(session, entry) && (
                       <button
                         type="button"
                         className="ghost"
@@ -313,32 +1046,130 @@ function SessionTranscript({ id, limit }: { id: string; limit: number }) {
                       >
                         Interrupt
                       </button>
-                    }
-                  />
-                ) : (
-                  <Bubble role="user" label={sent ? 'Sent' : 'Sending'} text={text} faded />
-                )}
-              </div>
-            </div>
-          ))}
-          <div className="collapse" data-open={typing || undefined}>
-            <div>
+                    )
+                  }
+                />
+              )
+            })}
+            {compacting && (
               <div style={BUBBLE}>
-                <span className="typing">
-                  <i />
-                  <i />
-                  <i />
-                </span>
+                <Working since={new Date(compacting.at).toISOString()} tokens={0} label="Compacting" />
               </div>
-            </div>
+            )}
+            <QueuedMessage session={session} onError={setError} />
           </div>
-          <QueuedMessage session={session} onError={setError} />
         </div>
+        {away && (
+          <button
+            type="button"
+            className="icon round fade-in"
+            title="Jump to latest"
+            aria-label="Jump to latest"
+            style={{ position: 'absolute', bottom: 12, left: 12, zIndex: 2, boxShadow: 'var(--shadow)' }}
+            onClick={scrollToEnd}
+          >
+            <Icon name="arrow-down" size={14} />
+          </button>
+        )}
       </div>
       <div className="composer-footer">
         {decision && <DecisionPanel session={session} decision={decision} onError={setError} />}
-        <Composer session={session} onError={setError} onQueued={scrollToEnd} />
+        <Composer session={session} onError={setError} />
       </div>
+    </div>
+  )
+}
+
+/** Highlights a text's matches in the loaded transcript; Enter steps to older matches, Shift+Enter to newer ones. */
+function TranscriptSearch({
+  root,
+  messages,
+  onClose,
+}: {
+  root: RefObject<HTMLElement | null>
+  messages: Message[]
+  onClose: () => void
+}) {
+  const [text, setText] = useState('')
+  const [ranges, setRanges] = useState<Range[]>([])
+  const [current, setCurrent] = useState(0)
+
+  useEffect(() => {
+    const needle = text.trim().toLowerCase()
+    const found: Range[] = []
+    const walker = root.current && needle ? document.createTreeWalker(root.current, NodeFilter.SHOW_TEXT) : undefined
+    for (let node = walker && walker.nextNode(); node; node = walker!.nextNode()) {
+      const value = node.nodeValue!.toLowerCase()
+      for (let at = value.indexOf(needle); at >= 0; at = value.indexOf(needle, at + needle.length)) {
+        const range = new Range()
+        range.setStart(node, at)
+        range.setEnd(node, at + needle.length)
+        found.push(range)
+      }
+    }
+    setRanges(found)
+    setCurrent(found.length - 1)
+  }, [text, messages])
+
+  useEffect(() => {
+    const match = ranges[current]
+    CSS.highlights.set('search', new Highlight(...ranges))
+    CSS.highlights.set('search-current', match ? new Highlight(match) : new Highlight())
+    const el = match?.startContainer.parentElement
+    for (let details = el?.closest('details'); details; details = details.parentElement?.closest('details'))
+      details.open = true
+    el?.scrollIntoView({ block: 'center' })
+  }, [ranges, current])
+
+  useEffect(
+    () => () => {
+      CSS.highlights.delete('search')
+      CSS.highlights.delete('search-current')
+    },
+    [],
+  )
+
+  const step = (by: number) => ranges.length && setCurrent((current + by + ranges.length) % ranges.length)
+  return (
+    <div className="transcript-search">
+      <input
+        autoFocus
+        value={text}
+        placeholder="Search this chat"
+        aria-label="Search this chat"
+        onChange={e => setText(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            step(e.shiftKey ? 1 : -1)
+          } else if (e.key === 'Escape') {
+            e.stopPropagation()
+            onClose()
+          }
+        }}
+      />
+      <span className="sub">
+        {text.trim() && (ranges.length ? `${ranges.length - current}/${ranges.length}` : 'No matches')}
+      </span>
+      <button
+        className="ghost icon small"
+        title="Older match (Enter)"
+        aria-label="Older match"
+        onClick={() => step(-1)}
+      >
+        <Icon name="chevron-up" size={14} />
+      </button>
+      <button
+        className="ghost icon small"
+        title="Newer match (Shift+Enter)"
+        aria-label="Newer match"
+        onClick={() => step(1)}
+      >
+        <Icon name="chevron-down" size={14} />
+      </button>
+      <button className="ghost icon small" title="Close (Esc)" aria-label="Close search" onClick={onClose}>
+        ✕
+      </button>
     </div>
   )
 }

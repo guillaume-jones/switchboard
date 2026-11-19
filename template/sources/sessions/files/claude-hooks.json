@@ -1,14 +1,109 @@
 {
   "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\"" }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\"" }] }],
-    "PreToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\"" }] }],
-    "PermissionRequest": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/zsh \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/decide\"", "timeout": 600 }] }],
-    "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\"" }] }],
-    "PostToolUseFailure": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\"" }] }],
-    "Notification": [{ "hooks": [{ "type": "command", "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\"" }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\"" }] }],
-    "StopFailure": [{ "hooks": [{ "type": "command", "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\"" }] }],
-    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\"" }] }]
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\""
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/zsh \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/decide\"",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\""
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\""
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\""
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\""
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/dash \"${SWITCHBOARD_HOME:-$HOME/.switchboard}/sources/sessions/files/hook\""
+          }
+        ]
+      }
+    ]
   }
 }

@@ -68,15 +68,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-      - name: Build the swb sidecar
+      - name: Build the swb and swb-hold sidecars
         run: |
           mkdir -p app/src-tauri/binaries
           for target in ${{ runner.os == 'macOS' && 'aarch64-apple-darwin x86_64-apple-darwin' || matrix.target }}; do
-            cargo build --release -p switchboard-cli --target $target
-            cp target/$target/release/swb app/src-tauri/binaries/swb-$target
+            cargo build --release -p switchboard-cli -p switchboard-core --bin swb --bin swb-hold --target $target
+            for bin in swb swb-hold; do
+              cp target/$target/release/$bin app/src-tauri/binaries/$bin-$target
+            done
           done
           if [ "$RUNNER_OS" = macOS ]; then
-            lipo -create -output app/src-tauri/binaries/swb-universal-apple-darwin app/src-tauri/binaries/swb-*-apple-darwin
+            for bin in swb swb-hold; do
+              lipo -create -output app/src-tauri/binaries/$bin-universal-apple-darwin app/src-tauri/binaries/$bin-*-apple-darwin
+            done
           fi
       - name: Build the app
         working-directory: app

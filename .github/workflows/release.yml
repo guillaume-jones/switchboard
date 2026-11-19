@@ -79,7 +79,8 @@ jobs:
           done
           if [ "$RUNNER_OS" = macOS ]; then
             for bin in swb swb-hold; do
-              lipo -create -output app/src-tauri/binaries/$bin-universal-apple-darwin app/src-tauri/binaries/$bin-*-apple-darwin
+              lipo -create -output app/src-tauri/binaries/$bin-universal-apple-darwin \
+                app/src-tauri/binaries/$bin-aarch64-apple-darwin app/src-tauri/binaries/$bin-x86_64-apple-darwin
             done
           fi
       - name: Build the app

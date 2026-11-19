@@ -12,7 +12,7 @@ vi.mock('./bridge', () => bridge)
 bridge.on.mockImplementation((event: string, cb: (p: any) => void) => (handlers[event] = cb))
 bridge.subscribe.mockImplementation(async () => ({ id: nextId++, rows: [{ n: 0 }] }))
 
-const { subscription } = await import('./subscriptions')
+const { deliverRows, subscription } = await import('./subscriptions')
 const tick = () => new Promise(r => setTimeout(r))
 
 beforeEach(() => {
@@ -97,24 +97,12 @@ test('rows pushed before the subscription registers are not lost', async () => {
   expect(l).toHaveBeenCalledOnce()
 })
 
-test('a reconnect reopens open subscriptions under new ids', async () => {
-  const s = subscription('reconnecting')
+test('rows delivered by a resync reach their subscription', async () => {
+  const s = subscription('resynced')
   const off = s.subscribe(() => {})
   await tick()
-  const ids = async () =>
-    Promise.all(
-      bridge.subscribe.mock.calls.flatMap(([name], i) =>
-        name === 'reconnecting' ? [bridge.subscribe.mock.results[i].value.then((r: { id: number }) => r.id)] : [],
-      ),
-    )
-  handlers.reconnect(null)
-  await tick()
-  const [before, after] = await ids()
-  expect(after).not.toBe(before)
-  handlers.rows({ id: before, rows: [{ n: 'stale' }] })
-  handlers.rows({ id: after, rows: [{ n: 'fresh' }] })
+  const { id } = await bridge.subscribe.mock.results.at(-1)!.value
+  deliverRows([{ id, rows: [{ n: 'fresh' }] }])
   expect(s.getSnapshot()).toEqual([{ n: 'fresh' }])
   off()
-  await tick()
-  expect(bridge.unsubscribe).toHaveBeenCalledWith(after)
 })

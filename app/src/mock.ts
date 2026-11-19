@@ -225,7 +225,7 @@ const listeners: { [E in keyof Events]: ((payload: Events[E]) => void)[] } = {
   rows: [],
   config: [],
   card: [],
-  reconnect: [],
+  resync: [],
 }
 const emit = <E extends keyof Events>(event: E, payload: Events[E]) => {
   for (const listener of listeners[event]) listener(payload)

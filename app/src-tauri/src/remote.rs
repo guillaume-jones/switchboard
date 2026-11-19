@@ -2,7 +2,7 @@
 //! `tailscale serve` exposes as `https://<device>.<tailnet>.ts.net:<remote>` to the tailnet only.
 
 use crate::push::Push;
-use crate::{App, dispatch, with};
+use crate::{App, Reply, dispatch, with};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path, Request, State};
@@ -11,8 +11,11 @@ use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasher, BuildHasherDefault};
+use std::io::Write;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
@@ -32,14 +35,20 @@ impl Clients {
         self.0.lock().unwrap().get(id).cloned()
     }
 
-    /// Sends `rows` to the client that subscribed, and everything else to every client. False if no client
-    /// owns these rows.
+    /// Sends `rows`, with their digest, to the client that subscribed, and everything else to every client. False
+    /// if no client owns these rows.
     pub(crate) fn emit(&self, event: &str, payload: &Value) -> bool {
         let clients = self.0.lock().unwrap();
         if event == "rows" {
             let id = payload["id"].as_u64().unwrap_or_default();
             let owner = clients.values().find(|c| c.subs.lock().unwrap().contains(&id));
-            owner.map(|c| c.events.send((event.into(), payload.clone()))).is_some()
+            owner
+                .map(|c| {
+                    let mut payload = payload.clone();
+                    payload["hash"] = digest(&payload["rows"]).into();
+                    c.events.send((event.into(), payload))
+                })
+                .is_some()
         } else {
             clients.values().for_each(|c| _ = c.events.send((event.into(), payload.clone())));
             false
@@ -56,6 +65,77 @@ struct Tailnet {
 }
 
 const CLIENT_HEADER: &str = "switchboard-client";
+const NO_STREAM: &str = "no open event stream for this client";
+/// Larger, and the timing log starts over.
+const LOG_LIMIT: u64 = 1 << 20;
+
+fn digest(value: &Value) -> String {
+    format!("{:016x}", BuildHasherDefault::<DefaultHasher>::default().hash_one(value.to_string()))
+}
+
+/// Drops a client and its subscriptions.
+fn close(state: &App, id: &str) {
+    let Some(client) = state.remote.0.lock().unwrap().remove(id) else { return };
+    let ids: Vec<u64> = client.subs.lock().unwrap().drain().collect();
+    if let Ok(engine) = &*state.engine.read().unwrap() {
+        ids.into_iter().for_each(|id| engine.unsubscribe(id));
+    }
+}
+
+/// What a device's cache lacks: the config and cards whose digest differs from the `manifest`'s, and its
+/// subscriptions, opened for this client, with their rows unless they match. Closes the device's `previous` client.
+fn resync(state: &App, client: &Client, manifest: Value) -> Reply {
+    if let Some(previous) = manifest["previous"].as_str() {
+        close(state, previous);
+    }
+    with(state, |e| {
+        let config = e.config();
+        let config_hash = digest(&config);
+        let mut cards = Map::new();
+        for name in config["cards"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+            let modules = e.card(name)?;
+            let hash = digest(&modules);
+            if manifest["cards"][name] != hash {
+                cards.insert(name.into(), json!({ "hash": hash, "modules": modules }));
+            }
+        }
+        let subs: Vec<Value> = manifest["subs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|sub| {
+                let params = if sub["params"].is_null() { json!({}) } else { sub["params"].clone() };
+                match e.subscribe(sub["name"].as_str().unwrap_or_default(), params) {
+                    Ok((id, rows)) => {
+                        client.subs.lock().unwrap().insert(id);
+                        let hash = digest(&rows);
+                        let rows = if sub["hash"] == hash { Value::Null } else { rows };
+                        json!({ "local": sub["local"], "id": id, "hash": hash, "rows": rows })
+                    }
+                    Err(error) => json!({ "local": sub["local"], "error": format!("{error:#}") }),
+                }
+            })
+            .collect();
+        let changed = manifest["config"] != config_hash;
+        Ok(json!({
+            "config": if changed { config } else { Value::Null },
+            "config_hash": config_hash,
+            "cards": cards,
+            "subs": subs,
+        }))
+    })
+}
+
+/// Appends a device's reconnect timings to `data/remote.log`.
+fn log(entry: Value) -> Reply {
+    let path = switchboard_core::home().join("data/remote.log");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > LOG_LIMIT) {
+        let _ = std::fs::remove_file(&path);
+    }
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| e.to_string())?;
+    writeln!(file, "{entry}").map_err(|e| e.to_string())?;
+    Ok(Value::Null)
+}
 
 /// `tailscale` from the app bundle's minimal PATH, Homebrew, the standalone CLI or the Mac app.
 fn tailscale(args: &[&str]) -> Result<String, String> {
@@ -142,11 +222,13 @@ async fn call(State(app): State<AppHandle>, Path(command): Path<String>, headers
     let reply = tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<App>();
         let client = state.remote.get(&client);
-        if client.is_none() && command == "subscribe" {
-            return Err("no open event stream for this client".into());
+        if client.is_none() && matches!(command.as_str(), "subscribe" | "resync") {
+            return Err(NO_STREAM.into());
         }
         let push = || state.push.get().ok_or_else(|| "push is not available".to_string());
         match command.as_str() {
+            "resync" => return resync(&state, client.as_ref().unwrap(), args),
+            "log" => return log(args),
             "push_key" => return Ok(json!({ "key": push()?.public_key() })),
             "push_subscribe" => return push()?.subscribe(args).map(|()| Value::Null),
             _ => {}
@@ -167,12 +249,7 @@ struct Closed(AppHandle, String);
 
 impl Drop for Closed {
     fn drop(&mut self) {
-        let state = self.0.state::<App>();
-        let Some(client) = state.remote.0.lock().unwrap().remove(&self.1) else { return };
-        let ids: Vec<u64> = client.subs.lock().unwrap().drain().collect();
-        if let Ok(engine) = &*state.engine.read().unwrap() {
-            ids.into_iter().for_each(|id| engine.unsubscribe(id));
-        }
+        close(&self.0.state::<App>(), &self.1);
     }
 }
 

@@ -14,7 +14,7 @@ export type Config = {
   queue_expiry: Record<string, number>
   /** Seconds another device shows as reconnecting after losing the desktop, before offline. */
   reconnect_timeout: number
-  /** Seconds another device waits for the desktop before answering from its cache and opening the stream again. */
+  /** Seconds another device waits for a stream to say hello before opening another alongside it. */
   connect_timeout: number
   sources: Record<string, { item_card?: string | null }>
   cards: string[]
@@ -42,13 +42,14 @@ export type Events = {
   rows: { id: number; rows: Row[] }
   config: null
   card: { name: string }
-  /** Another device's connection came back: its subscriptions and cards are gone on the desktop and are opened again. */
-  reconnect: null
+  /** Another device caught up with the desktop: everything that changed meanwhile, to apply together. */
+  resync: { config?: Config; cards: Record<string, CardModules>; rows: { id: number; rows: Row[] }[] }
 }
 /** Rejects with an `Error`. */
 export type Backend = {
   invoke<C extends keyof Commands>(command: C, args: Commands[C]['args']): Promise<Commands[C]['result']>
-  listen<E extends keyof Events>(event: E, handler: (payload: Events[E]) => void): void
+  /** A handler's promise holds back the events after it, on another device. */
+  listen<E extends keyof Events>(event: E, handler: (payload: Events[E]) => unknown): void
 }
 
 export const toError = (thrown: unknown) => (thrown instanceof Error ? thrown : new Error(String(thrown)))

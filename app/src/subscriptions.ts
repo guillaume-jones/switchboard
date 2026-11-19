@@ -9,15 +9,15 @@ const rowHandlers = new Map<number, (rows: Row[]) => void>()
 const earlyRows = new Map<number, Row[]>()
 let pendingOpens = 0
 
-bridge.on('rows', ({ id, rows }) => {
+function receive({ id, rows }: { id: number; rows: Row[] }) {
   const handler = rowHandlers.get(id)
   if (handler) handler(rows)
   else if (pendingOpens > 0) earlyRows.set(id, rows)
-})
+}
 
-bridge.on('reconnect', () => {
-  for (const subscription of registry.values()) subscription.reopen()
-})
+bridge.on('rows', receive)
+
+export const deliverRows = (rows: { id: number; rows: Row[] }[]) => rows.forEach(receive)
 
 /** The live result of a view or query, shared by every reader of the same name and params. Shaped for `useSyncExternalStore`. */
 export class Subscription {
@@ -43,14 +43,6 @@ export class Subscription {
       // Deferred so an unmount followed by a remount in the same task keeps the backend subscription.
       setTimeout(this.#closeIfUnused)
     }
-  }
-
-  /** Opens it again under a new id, after the backend dropped it with its connection. */
-  reopen() {
-    const previous = this.#backendId
-    if (!previous) return
-    previous.then(id => id !== undefined && rowHandlers.delete(id))
-    this.#backendId = this.#open()
   }
 
   async #open() {

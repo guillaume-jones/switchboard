@@ -1,7 +1,8 @@
 import { useSyncExternalStore } from 'react'
 import * as bridge from './bridge'
 import type { Config } from './bridge'
-import { loadCard } from './cards'
+import { loadCard, prepareCards } from './cards'
+import { deliverRows } from './subscriptions'
 
 let config: Config | Error | undefined
 let latestRequest = 0
@@ -17,14 +18,33 @@ async function reload() {
   } catch (error) {
     next = bridge.toError(error)
   }
-  if (request !== latestRequest) return
+  if (request === latestRequest) publish(next)
+}
+
+function publish(next: Config | Error) {
   config = next
   for (const listener of listeners) listener()
 }
 
+let resyncs = Promise.resolve()
+
+/** Applies a catch-up in one render: new cards and the config once loaded, together with the rows. */
+bridge.on('resync', ({ config: changed, cards, rows }) => {
+  resyncs = resyncs.then(async () => {
+    const swap = await prepareCards(cards)
+    if (changed) await Promise.allSettled(changed.cards.map(name => loadCard(name).component))
+    swap()
+    if (changed) {
+      latestRequest++
+      publish(changed)
+    }
+    deliverRows(rows)
+  })
+  return resyncs
+})
+
 reload()
 bridge.on('config', reload)
-bridge.on('reconnect', reload)
 
 function watch(listener: () => void) {
   listeners.add(listener)

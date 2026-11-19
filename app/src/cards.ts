@@ -22,11 +22,6 @@ bridge.on('card', ({ name }) => {
   if (cache.has(name)) refresh(name)
 })
 
-// Cards may have changed while the connection was down.
-bridge.on('reconnect', () => {
-  for (const name of cache.keys()) refresh(name)
-})
-
 /**
  * Swaps in the card's new version once it has loaded, so its slots re-render without suspending, and the remounted card
  * finds its subscriptions (closed a tick after unmount) still open, with their rows.
@@ -56,10 +51,23 @@ export function loadCard(name: string): LoadedCard {
   return card
 }
 
-function fetchCard(name: string): LoadedCard {
-  const component = bridge.card(name).then(modules => instantiate(name, modules))
+function loaded(component: Promise<CardComponent>): LoadedCard {
   exposeSettledState(component)
   return { generation: ++generation, component }
+}
+
+const fetchCard = (name: string) => loaded(bridge.card(name).then(modules => instantiate(name, modules)))
+
+/** Loads the new versions of the cards already in use, and returns what swaps them in. */
+export async function prepareCards(cards: Record<string, CardModules>): Promise<() => void> {
+  const next = Object.entries(cards)
+    .filter(([name]) => cache.has(name))
+    .map(([name, modules]) => [name, loaded(instantiate(name, modules))] as const)
+  await Promise.allSettled(next.map(([, card]) => card.component))
+  return () => {
+    for (const [name, card] of next) cache.set(name, card)
+    if (next.length) for (const listener of listeners) listener()
+  }
 }
 
 /** Every card gets its own instances of the `cards/lib` helpers it imports. */

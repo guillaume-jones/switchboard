@@ -39,6 +39,8 @@ const RESYNC_TIMEOUT_MS = 10000
 /** A gap this long between the 1 s checks means the app was suspended, which iOS does not always report. */
 const SUSPENDED_MS = 5000
 const AS_OF_KEY = 'switchboard.as_of'
+/** How often a visible app tells the desktop so; the desktop forgets it after 25 s, so a phone frozen in the background gets pushes again. */
+const PRESENCE_MS = 10000
 
 let status: Status = {
   connection: 'online',
@@ -232,6 +234,20 @@ const pushAvailable = () =>
   'PushManager' in window &&
   'Notification' in window &&
   'serviceWorker' in navigator
+
+let presenceAt = 0
+
+/** Tells the desktop whether this app is on screen, so it skips pushing to it while it is. Survives the page being hidden. */
+function presence() {
+  if (!client) return
+  presenceAt = Date.now()
+  fetch('/api/presence', {
+    method: 'POST',
+    keepalive: true,
+    headers: { 'content-type': 'application/json', [CLIENT_HEADER]: client },
+    body: JSON.stringify({ visible: document.visibilityState === 'visible' }),
+  }).catch(() => {})
+}
 
 /** Sends this device's push subscription again, so the desktop's list survives it being reset. */
 async function syncPush() {
@@ -439,6 +455,7 @@ async function hello(stream: Stream, id: string) {
   byServer.clear()
   for (const sub of subs.values()) sub.server = undefined
   syncPush()
+  presence()
   await flush()
   if (stream === live) resync(previous)
 }
@@ -471,6 +488,7 @@ function check() {
   lastCheck = now
   if (document.visibilityState !== 'visible') return
   if (suspended) return wake('suspended')
+  if (live && now - presenceAt >= PRESENCE_MS) presence()
   if (live && now - streamAt > STREAM_SILENT_MS) return end(live)
   if ((!live || replacing) && now >= nextAttemptAt) {
     nextAttemptAt = now + connectMs
@@ -590,6 +608,7 @@ export function connect(): Backend {
   navigator.storage?.persist?.()
   let hiddenAt = 0
   document.addEventListener('visibilitychange', () => {
+    presence()
     if (document.visibilityState !== 'visible') {
       hiddenAt = Date.now()
       for (const attempt of attempts) attempt.controller.abort()

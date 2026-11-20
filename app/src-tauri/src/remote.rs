@@ -19,6 +19,7 @@ use std::hash::{BuildHasher, BuildHasherDefault};
 use std::io::Write;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
@@ -26,6 +27,10 @@ use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 pub(crate) struct Client {
     pub(crate) subs: Mutex<HashSet<u64>>,
     events: UnboundedSender<(String, Value)>,
+    /// The push subscription endpoint of the device behind this stream.
+    endpoint: Mutex<Option<String>>,
+    /// Until when the app counts as on screen, renewed by its `presence` calls while it is.
+    visible_until: Mutex<Option<Instant>>,
 }
 
 #[derive(Default)]
@@ -34,6 +39,17 @@ pub(crate) struct Clients(Mutex<HashMap<String, Arc<Client>>>);
 impl Clients {
     fn get(&self, id: &str) -> Option<Arc<Client>> {
         self.0.lock().unwrap().get(id).cloned()
+    }
+
+    /// The push endpoints of devices showing the app now, which need no push.
+    pub(crate) fn watching(&self) -> HashSet<String> {
+        let now = Instant::now();
+        let clients = self.0.lock().unwrap();
+        clients
+            .values()
+            .filter(|c| c.visible_until.lock().unwrap().is_some_and(|until| until > now))
+            .filter_map(|c| c.endpoint.lock().unwrap().clone())
+            .collect()
     }
 
     /// Sends `rows`, with their digest, to the client that subscribed, and everything else to every client. False
@@ -69,6 +85,8 @@ const CLIENT_HEADER: &str = "switchboard-client";
 const NO_STREAM: &str = "no open event stream for this client";
 /// Larger, and the timing log starts over.
 const LOG_LIMIT: u64 = 1 << 20;
+/// How long a `presence` call keeps an app on screen; it repeats every 10 s while visible.
+const PRESENCE_TTL: Duration = Duration::from_secs(25);
 
 fn digest(value: &Value) -> String {
     format!("{:016x}", BuildHasherDefault::<DefaultHasher>::default().hash_one(value.to_string()))
@@ -232,7 +250,18 @@ async fn call(State(app): State<AppHandle>, Path(command): Path<String>, headers
             "resync" => return resync(&state, client.as_ref().unwrap(), args),
             "log" => return log(args),
             "push_key" => return Ok(json!({ "key": push()?.public_key() })),
-            "push_subscribe" => return push()?.subscribe(args).map(|()| Value::Null),
+            "push_subscribe" => {
+                if let Some(client) = &client {
+                    *client.endpoint.lock().unwrap() = args["endpoint"].as_str().map(String::from);
+                }
+                return push()?.subscribe(args).map(|()| Value::Null);
+            }
+            "presence" => {
+                let client = client.as_ref().ok_or(NO_STREAM)?;
+                let visible = args["visible"].as_bool().unwrap_or(false);
+                *client.visible_until.lock().unwrap() = visible.then(|| Instant::now() + PRESENCE_TTL);
+                return Ok(Value::Null);
+            }
             _ => {}
         }
         let unowned = Mutex::default();
@@ -315,7 +344,12 @@ async fn events(State(app): State<AppHandle>) -> impl IntoResponse {
     let id = uuid::Uuid::new_v4().to_string();
     let (events, received) = unbounded_channel();
     let _ = events.send(("hello".to_string(), json!({ "client": id })));
-    let client = Arc::new(Client { subs: Mutex::default(), events });
+    let client = Arc::new(Client {
+        subs: Mutex::default(),
+        events,
+        endpoint: Mutex::default(),
+        visible_until: Mutex::default(),
+    });
     app.state::<App>().remote.0.lock().unwrap().insert(id.clone(), client);
     let stream = futures_util::stream::unfold((received, Closed(app, id)), |(mut received, closed)| async move {
         let (event, payload) = received.recv().await?;

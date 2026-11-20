@@ -169,7 +169,7 @@ impl switchboard_core::Emitter for Forward {
                     tauri::async_runtime::spawn(async move {
                         let state = app.state::<App>();
                         let Some(push) = state.push.get() else { return };
-                        for error in push.send(message).await {
+                        for error in push.send(message, state.remote.watching()).await {
                             let _ = with(&state, |e| {
                                 e.error("push", "core.notify", &error);
                                 Ok(Value::Null)

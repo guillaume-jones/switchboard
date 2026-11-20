@@ -1,8 +1,10 @@
-//! Web push to other devices' installed apps: `core.notify`, while the desktop is unattended per the `push` setting.
+//! Web push to other devices' installed apps: `core.notify`, while the desktop is unattended per the `push` setting
+//! and the device is not showing the app.
 //! The VAPID key pair and the devices' subscriptions are kept in `data/push.json`; no card or rule reads them.
 
 use base64ct::{Base64UrlUnpadded as Base64, Encoding};
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -72,10 +74,17 @@ impl Push {
         reqwest::Request::try_from(request.map(reqwest::Body::from)).ok()
     }
 
-    /// Sends to every device, forgetting those whose push service says the subscription is gone.
-    pub(crate) async fn send(&self, payload: Value) -> Vec<String> {
+    /// Sends to every device but those `watching`, forgetting those whose push service says the subscription is gone.
+    pub(crate) async fn send(&self, payload: Value, watching: HashSet<String>) -> Vec<String> {
         let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
-        let subscriptions = self.subscriptions.lock().unwrap().clone();
+        let subscriptions: Vec<Value> = self
+            .subscriptions
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s["endpoint"].as_str().is_none_or(|e| !watching.contains(e)))
+            .cloned()
+            .collect();
         let mut errors = Vec::new();
         for subscription in subscriptions {
             let Some(request) = self.request(&subscription, &payload) else {

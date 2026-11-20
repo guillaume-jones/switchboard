@@ -190,6 +190,31 @@ impl switchboard_core::Emitter for Forward {
     }
 }
 
+/// Turns off WebKit's cap of page rendering near 60fps, so 120Hz displays scroll at their full rate. A private WebKit
+/// feature flag: skipped if this WebKit no longer has it.
+#[cfg(target_os = "macos")]
+unsafe fn full_frame_rate(webview: *mut objc2::runtime::AnyObject) {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send, sel};
+    use objc2_foundation::{NSArray, NSString};
+    let preferences_class = class!(WKPreferences);
+    let supported: bool = unsafe { msg_send![preferences_class, respondsToSelector: sel!(_features)] };
+    if webview.is_null() || !supported {
+        return;
+    }
+    unsafe {
+        let configuration: *mut AnyObject = msg_send![&*webview, configuration];
+        let preferences: *mut AnyObject = msg_send![&*configuration, preferences];
+        let features: *mut NSArray<AnyObject> = msg_send![preferences_class, _features];
+        for feature in (*features).iter() {
+            let key: *mut NSString = msg_send![&*feature, key];
+            if (*key).to_string() == "PreferPageRenderingUpdatesNear60FPSEnabled" {
+                let _: () = msg_send![&*preferences, _setEnabled: false, forFeature: &*feature];
+            }
+        }
+    }
+}
+
 fn main() {
     let builder = tauri::Builder::default();
     // A second launch, such as from a desktop shortcut, shows this window instead; macOS does so itself with Reopen.
@@ -336,6 +361,10 @@ fn main() {
                     std::thread::sleep(IDLE_POLL);
                 }
             });
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.with_webview(|webview| unsafe { full_frame_rate(webview.inner().cast()) });
+            }
             #[cfg(target_os = "macos")]
             notifications::init({
                 let handle = handle.clone();

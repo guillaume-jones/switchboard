@@ -46,9 +46,16 @@ self.addEventListener('fetch', event => {
 })
 
 self.addEventListener('push', event => {
-  const { title, body } = event.data?.json() ?? {}
+  const { title, body, badge } = event.data?.json() ?? {}
   event.waitUntil(
-    self.registration.showNotification(title || 'Switchboard', { body, icon: '/icon-192.png', badge: '/badge-96.png' }),
+    Promise.all([
+      self.registration.showNotification(title || 'Switchboard', {
+        body,
+        icon: '/icon-192.png',
+        badge: '/badge-96.png',
+      }),
+      badge > 0 ? self.navigator.setAppBadge?.(badge) : self.navigator.clearAppBadge?.(),
+    ]),
   )
 })
 

@@ -613,7 +613,10 @@ export function connect(): Backend {
       hiddenAt = Date.now()
       for (const attempt of attempts) attempt.controller.abort()
       attempts.clear()
-    } else if (!live || Date.now() - hiddenAt >= connectMs) wake('foreground')
+    } else {
+      navigator.clearAppBadge?.().catch(() => {})
+      if (!live || Date.now() - hiddenAt >= connectMs) wake('foreground')
+    }
   })
   window.addEventListener('online', () => wake('online'))
   window.addEventListener('pageshow', event => event.persisted && wake('pageshow'))

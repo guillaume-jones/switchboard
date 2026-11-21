@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::fs;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::Duration;
 use switchboard_core::{Engine, Origin, Settings, SystemEvent};
@@ -28,6 +29,7 @@ pub(crate) struct App {
     push: OnceLock<push::Push>,
     hotkey: Mutex<String>,
     badge: Mutex<(String, u64)>,
+    badge_count: AtomicUsize,
 }
 
 const IDLE_POLL: Duration = Duration::from_secs(15);
@@ -97,6 +99,7 @@ fn settings(app: &AppHandle) -> Option<Settings> {
 
 fn count(app: &AppHandle, rows: &Value) {
     let n = rows.as_array().map_or(0, Vec::len);
+    app.state::<App>().badge_count.store(n, Ordering::Relaxed);
     #[cfg(target_os = "macos")]
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_badge_count((n > 0).then_some(n as i64));
@@ -165,7 +168,8 @@ impl switchboard_core::Emitter for Forward {
                 }
                 if settings.is_some_and(|s| push::wanted(&s)) {
                     let app = self.0.clone();
-                    let message = json!({ "title": payload["title"], "body": payload["body"] });
+                    let badge = self.0.state::<App>().badge_count.load(Ordering::Relaxed);
+                    let message = json!({ "title": payload["title"], "body": payload["body"], "badge": badge });
                     tauri::async_runtime::spawn(async move {
                         let state = app.state::<App>();
                         let Some(push) = state.push.get() else { return };
@@ -249,6 +253,7 @@ fn main() {
             push: OnceLock::new(),
             hotkey: Mutex::default(),
             badge: Mutex::default(),
+            badge_count: AtomicUsize::new(0),
         })
         .invoke_handler(tauri::generate_handler![call, pty::pty_open, pty::pty_input, pty::pty_resize, pty::pty_close])
         .on_page_load(|webview, payload| {

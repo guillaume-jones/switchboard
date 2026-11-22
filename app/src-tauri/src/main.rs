@@ -1,7 +1,6 @@
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::fs;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::Duration;
 use switchboard_core::{Engine, Origin, Settings, SystemEvent};
@@ -29,10 +28,12 @@ pub(crate) struct App {
     push: OnceLock<push::Push>,
     hotkey: Mutex<String>,
     badge: Mutex<(String, u64)>,
-    badge_count: AtomicUsize,
+    badge_count: tokio::sync::watch::Sender<usize>,
 }
 
 const IDLE_POLL: Duration = Duration::from_secs(15);
+/// How long a push waits for the badge view to reflect the write that sent it.
+const BADGE_SETTLE: Duration = Duration::from_secs(1);
 
 pub(crate) type Reply = Result<Value, String>;
 
@@ -99,7 +100,7 @@ fn settings(app: &AppHandle) -> Option<Settings> {
 
 fn count(app: &AppHandle, rows: &Value) {
     let n = rows.as_array().map_or(0, Vec::len);
-    app.state::<App>().badge_count.store(n, Ordering::Relaxed);
+    app.state::<App>().badge_count.send_if_modified(|count| std::mem::replace(count, n) != n);
     #[cfg(target_os = "macos")]
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_badge_count((n > 0).then_some(n as i64));
@@ -168,9 +169,12 @@ impl switchboard_core::Emitter for Forward {
                 }
                 if settings.is_some_and(|s| push::wanted(&s)) {
                     let app = self.0.clone();
-                    let badge = self.0.state::<App>().badge_count.load(Ordering::Relaxed);
-                    let message = json!({ "title": payload["title"], "body": payload["body"], "badge": badge });
+                    let (title, body) = (payload["title"].clone(), payload["body"].clone());
+                    let mut badge = self.0.state::<App>().badge_count.subscribe();
                     tauri::async_runtime::spawn(async move {
+                        // A notify is emitted before its write commits, so the badge view's count catches up after it.
+                        let _ = tokio::time::timeout(BADGE_SETTLE, badge.changed()).await;
+                        let message = json!({ "title": title, "body": body, "badge": *badge.borrow() });
                         let state = app.state::<App>();
                         let Some(push) = state.push.get() else { return };
                         for error in push.send(message, state.remote.watching()).await {
@@ -253,7 +257,7 @@ fn main() {
             push: OnceLock::new(),
             hotkey: Mutex::default(),
             badge: Mutex::default(),
-            badge_count: AtomicUsize::new(0),
+            badge_count: tokio::sync::watch::Sender::new(0),
         })
         .invoke_handler(tauri::generate_handler![call, pty::pty_open, pty::pty_input, pty::pty_resize, pty::pty_close])
         .on_page_load(|webview, payload| {

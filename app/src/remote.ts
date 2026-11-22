@@ -237,6 +237,12 @@ const pushAvailable = () =>
 
 let presenceAt = 0
 
+/** The board is on screen: what the badge and notifications were drawing attention to is now in view. */
+function dismissAttention() {
+  navigator.clearAppBadge?.().catch(() => {})
+  navigator.serviceWorker?.ready.then(r => r.getNotifications()).then(shown => shown.forEach(n => n.close()))
+}
+
 /** Tells the desktop whether this app is on screen, so it skips pushing to it while it is. Survives the page being hidden. */
 function presence() {
   if (!client) return
@@ -606,6 +612,7 @@ export function connect(): Backend {
   loadOutbox()
   navigator.serviceWorker?.register('/sw.js')
   navigator.storage?.persist?.()
+  dismissAttention()
   let hiddenAt = 0
   document.addEventListener('visibilitychange', () => {
     presence()
@@ -614,7 +621,7 @@ export function connect(): Backend {
       for (const attempt of attempts) attempt.controller.abort()
       attempts.clear()
     } else {
-      navigator.clearAppBadge?.().catch(() => {})
+      dismissAttention()
       if (!live || Date.now() - hiddenAt >= connectMs) wake('foreground')
     }
   })

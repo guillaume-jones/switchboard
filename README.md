@@ -2,9 +2,9 @@
 
 An app to ingest any local data, serve personalized UI, and trigger any shell command.
 
-The UI & data lives in `~/.switchboard`, which can be re-written by agents at any time and hot reloads.
+The UI & data lives in `~/.switchboard` and can be changed at any time while providing performant hot-reloads & reactivity.
 
-![Switchboard's main board: a sidebar of projects, chats and terminals next to to-dos and pull requests](docs/screenshot.png)
+![Switchboard's default board from template](docs/screenshot.png)
 
 
 ## Install
@@ -22,12 +22,13 @@ The UI & data lives in `~/.switchboard`, which can be re-written by agents at an
 On first start the app creates `~/.switchboard` from the default [`template/`](template) as a git repo. This is the repo your agents can freely edit to add data or UI. 
 
 The default template includes:
-- Full chat interface (with dictation on Mac)
+- Full chat interface (w/ dictation on Mac)
 - File previews & terminals
 - Projects & todos
 - GitHub PRs
 
-It uses the Claude harness, but this can be swapped out freely. To track every agent session, not just those launched from Switchboard, merge the `hooks` from `claude-hooks.json` into your agent config.
+It uses the Claude harness, but this can be swapped out freely. 
+To track every agent session, not just those launched from Switchboard, merge the `hooks` from `claude-hooks.json` into your agent config.
 
 To start from another template instead, use `swb init <git url>`.
 

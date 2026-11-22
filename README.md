@@ -1,9 +1,8 @@
 # Switchboard
 
-
 An app to ingest any local data, serve personalized UI, and trigger any shell command.
 
-Everything it shows and does lives in `~/.switchboard`, which can be re-written by agents at any time and hot reloads.
+The UI & data lives in `~/.switchboard`, which can be re-written by agents at any time and hot reloads.
 
 ![Switchboard's main board: a sidebar of projects, chats and terminals next to to-dos and pull requests](docs/screenshot.png)
 
@@ -11,8 +10,6 @@ Everything it shows and does lives in `~/.switchboard`, which can be re-written 
 ## Install
 
 ### Download
-
-Requires git.
 
 - **MacOS**: [Switchboard.dmg](https://github.com/guillaume-jones/switchboard/releases/latest/download/Switchboard.dmg)
   - macOS will refuse to open the app at first. Go to System Settings → Privacy & Security and click Open Anyway.
@@ -22,28 +19,17 @@ Requires git.
 
 ### Template
 
-
 On first start the app creates `~/.switchboard` from the default [`template/`](template) as a git repo. This is the repo your agents can freely edit to add data or UI. 
 
-The default template includes chats with file previews, terminals, projects, to-dos, your GitHub PRs and Claude usage. It uses the Claude harness, but this can be swapped out freely. To track every agent session, not just those launched from Switchboard, merge the `hooks` from `~/.switchboard/sources/sessions/files/claude-hooks.json` into your agent config.
+The default template includes:
+- Full chat interface (with dictation on Mac)
+- File previews & terminals
+- Projects & todos
+- GitHub PRs
 
+It uses the Claude harness, but this can be swapped out freely. To track every agent session, not just those launched from Switchboard, merge the `hooks` from `claude-hooks.json` into your agent config.
 
-It needs:
-
-- [Claude Code](https://claude.com/claude-code), `python3` and `tmux`.
-- The [GitHub CLI](https://cli.github.com), logged in with `gh auth login`, for the PR list.
-- A Mac with Apple silicon for dictation, which offers to install itself (540 MB) the first time you use it.
-
-An example rule, off by default, has an agent fix and push to your PRs with failing CI or merge conflicts. To turn it on:
-
-```sh
-cd ~/.switchboard
-cp sources/github/files/fix_failing.json sources/github/rules/
-```
-
-To start from another template instead, quit the app and run `swb init <git url>` to keep pulling its updates, or `swb init <git url> --copy` for a repo of your own; `swb init` alone restores the built-in one.
-
-
+To start from another template instead, use `swb init <git url>`.
 
 ### Use from your phone
 
@@ -71,11 +57,10 @@ switchboard & # Linux
 ## Develop
 
 ```sh
-SWITCHBOARD_HOME=/tmp/switchboard-dev make dev   # window with hot reload, against a temp folder
+SWITCHBOARD_HOME=/tmp/switchboard-dev make dev
 ```
 
-Note that `template/` is only copied when the folder doesn't exist. Delete the scratch folder to pick up template changes. 
-
+`template/` is copied to `SWITCHBOARD_HOME` when the folder doesn't exist.
 
 See [Makefile](Makefile) for other commands, including `check` and `test`.
 

@@ -435,7 +435,7 @@ impl Shared {
         refreshes
     }
 
-    pub(super) fn subscribe(&self, name: &str, params: Value) -> Result<(u64, Value)> {
+    pub(super) fn subscribe(&self, name: &str, params: Value, registered: impl FnOnce(u64)) -> Result<(u64, Value)> {
         let loaded = self.loaded();
         let read = resolve(&loaded, name, &params)
             .inspect_err(|e| self.record(Event::error("subscribe", name, format!("{e:#}"))))?;
@@ -450,6 +450,7 @@ impl Shared {
             let active =
                 subscriptions.reads.entry(key.clone()).or_insert_with(|| ActiveRead::new(name, params, read.clone()));
             active.subscribers.push(id);
+            registered(id);
             (id, created)
         };
         // Retried until no batch committed during the read, so the result is not older than a push it raced.
@@ -463,7 +464,8 @@ impl Shared {
                 }
             };
             if created && let Some(active) = self.subscriptions.lock().unwrap().reads.get_mut(&key) {
-                active.last_hash = Some(result.hash);
+                // A refresh may have pushed meanwhile: the next must compare with that, or it would skip newer rows.
+                active.last_hash.get_or_insert(result.hash);
             }
             if self.batches_committed.load(SeqCst) == batches_before {
                 return Ok((id, result.rows));

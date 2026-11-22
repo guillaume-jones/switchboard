@@ -138,6 +138,8 @@ A subscription re-runs after every write to a table it reads and sends its whole
 
 A grid tile shows `cards/<Name>Header.tsx`, if it exists, in the tile bar of `<Name>`, with the same props: keep it to a status line and a button or two.
 
+Always `await confirm(...)`: in the Mac window it returns a promise, which is truthy whatever the answer.
+
 Cards receive `size` and `slot` (the slot `id`). Per-slot UI state goes in `localStorage` keyed by `slot`; navigation and layout live in the `ui` source, with the current board per client (`desktop` or `mobile`, passed down from `Root`). Shared styles live in `cards/lib/theme.ts`: `THEME` (the variables `--bg --panel --raised --fg --muted --border --accent --on-accent --info --bad --good --shadow --radius`, element defaults, button variants `.primary`, `.ghost`, `.icon`, `.danger`, `aria-pressed`/`aria-current` for selected buttons, and classes `.chip`, `.badge[data-tone=accent|info|good|bad]`, `.heading`, `.empty`, `.tile`, `.tile-bar`), which `Root.tsx` injects once. Add shared styles there rather than per card; touch screens get larger controls from it.
 
 ## Mobile

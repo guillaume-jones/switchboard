@@ -84,7 +84,7 @@ export default function Project({ project, layout }: CardProps<{ project: number
   }
 
   const remove = async () => {
-    if (!confirm(`Delete the project “${item.title}”? Its to-dos stay, unlinked.`)) return
+    if (!(await confirm(`Delete the project “${item.title}”? Its to-dos stay, unlinked.`))) return
     try {
       await mutate('ui.set_board', { client, id: 'main' })
       await mutate('ui.close_board', { id: grid })

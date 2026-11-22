@@ -1,0 +1,6 @@
+{
+  "identifier": "macos",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["dialog:allow-message"]
+}

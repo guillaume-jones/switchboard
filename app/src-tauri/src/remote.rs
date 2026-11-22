@@ -124,9 +124,9 @@ fn resync(state: &App, client: &Client, manifest: Value) -> Reply {
             .flatten()
             .map(|sub| {
                 let params = if sub["params"].is_null() { json!({}) } else { sub["params"].clone() };
-                match e.subscribe(sub["name"].as_str().unwrap_or_default(), params) {
+                let name = sub["name"].as_str().unwrap_or_default();
+                match e.subscribe_with(name, params, |id| _ = client.subs.lock().unwrap().insert(id)) {
                     Ok((id, rows)) => {
-                        client.subs.lock().unwrap().insert(id);
                         let hash = digest(&rows);
                         let rows = if sub["hash"] == hash { Value::Null } else { rows };
                         json!({ "local": sub["local"], "id": id, "hash": hash, "rows": rows })

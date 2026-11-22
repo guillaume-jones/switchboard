@@ -137,6 +137,10 @@ const unsent = new Set<number>()
 const waiting = new Map<number, Waiting>()
 let subIds = 0
 
+type Push = { id: number; rows: Row[]; hash: string }
+/** The last rows pushed for ids whose resync reply hasn't arrived yet. */
+const early = new Map<number, Push>()
+
 type Stream = { controller: AbortController }
 let live: Stream | undefined
 /** Streams that have not said hello yet. */
@@ -387,11 +391,16 @@ function apply(reply: ResyncReply) {
     Date.now() - timings.at,
   ])
   if (changes.config || changes.rows.length || Object.keys(changes.cards).length)
-    return afterApplied(() => emit('resync', changes))
+    afterApplied(() => emit('resync', changes))
+  for (const push of early.values()) if (byServer.has(push.id)) pushed(push)
+  early.clear()
+  return applied
 }
 
-function pushed({ id, rows, hash }: { id: number; rows: Row[]; hash: string }) {
+function pushed(push: Push) {
+  const { id, rows, hash } = push
   const local = byServer.get(id)
+  if (local === undefined && resyncing) early.set(id, push)
   const sub = local === undefined ? undefined : subs.get(local)
   if (!sub) return
   sub.hash = hash
@@ -459,6 +468,7 @@ async function hello(stream: Stream, id: string) {
   contact()
   phase('hello')
   byServer.clear()
+  early.clear()
   for (const sub of subs.values()) sub.server = undefined
   syncPush()
   presence()

@@ -604,9 +604,10 @@ function Row({
                 className="icon ghost danger"
                 title="Delete"
                 aria-label="Delete"
-                onClick={e => {
+                onClick={async e => {
                   e.stopPropagation()
-                  if (confirm(`Delete “${todo.title}”?`)) leave(() => mutate('workstreams.delete', { id: todo.id }))
+                  if (await confirm(`Delete “${todo.title}”?`))
+                    leave(() => mutate('workstreams.delete', { id: todo.id }))
                 }}
               >
                 <TrashIcon />

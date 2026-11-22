@@ -54,8 +54,8 @@ pub(crate) fn dispatch(app: &App, subs: &Mutex<HashSet<u64>>, command: &str, arg
         "config" => Ok(e.config()),
         "card" => e.card(&text("name")),
         "subscribe" => {
-            let (id, rows) = e.subscribe(&text("name"), params("params"))?;
-            subs.lock().unwrap().insert(id);
+            let (id, rows) =
+                e.subscribe_with(&text("name"), params("params"), |id| _ = subs.lock().unwrap().insert(id))?;
             Ok(json!({ "id": id, "rows": rows }))
         }
         "unsubscribe" => {

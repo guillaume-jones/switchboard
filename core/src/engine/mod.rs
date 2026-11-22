@@ -488,7 +488,13 @@ impl Engine {
     }
 
     pub fn subscribe(&self, name: &str, params: Value) -> Result<(u64, Value)> {
-        self.shared.subscribe(name, params)
+        self.shared.subscribe(name, params, |_| {})
+    }
+
+    /// `subscribe`, passing the id to `registered` before any rows can be pushed for it. Those pushed before this
+    /// returns are newer than, or lead up to, the rows it returns.
+    pub fn subscribe_with(&self, name: &str, params: Value, registered: impl FnOnce(u64)) -> Result<(u64, Value)> {
+        self.shared.subscribe(name, params, registered)
     }
 
     pub fn unsubscribe(&self, id: u64) {

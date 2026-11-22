@@ -1,0 +1,22 @@
+#!/usr/bin/env -S python3 -I
+"""docs.save {path, content, base}: saves content to a .txt file unless it no longer holds base, then restages it for
+docs_files (docs.read)."""
+import json, os, subprocess, sys
+
+args = json.loads(sys.stdin.readline())
+path = args["path"]
+file = os.path.realpath(os.path.expanduser(path))
+try:
+    if not file.lower().endswith(".txt"):
+        failure = f"{path} is not a .txt file"
+    else:
+        with open(file, "rb") as f:
+            current = f.read()
+        failure = None if current == args["base"].encode() else "The file changed on disk since you started editing. Revert to load it."
+        if not failure:
+            with open(file, "wb") as f:
+                f.write(args["content"].encode())
+            subprocess.run([os.path.join(os.environ["SOURCE_DIR"], "commands", "read")], check=True)
+except OSError as error:
+    failure = f"Can't save {path}: {error.strerror}"
+print(json.dumps({"outcome": "failure" if failure else "success", "summary": failure or f"saved {path}"}))

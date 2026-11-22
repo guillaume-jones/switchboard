@@ -1,0 +1,1 @@
+{ "pty": ["listen"], "timeouts": { "install": 1800 }, "queue_expiry": { "listen": 0, "install": 0 } }

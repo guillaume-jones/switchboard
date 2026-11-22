@@ -1,5 +1,7 @@
 import {
+  Fragment,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -9,8 +11,11 @@ import {
   type ReactNode,
 } from 'react'
 import { mutate, run, useQuery } from 'switchboard'
-import { clickedCode, copyCode, renderMarkdown } from './markdown'
+import { clickedCode, copyCode, DOC, fileChip, IMAGE, renderMarkdown, sendOpenDoc } from './markdown'
+import { unsentPath, useImage } from './image'
 import { useMobile } from './theme'
+import { Icon } from './icons'
+import { DictateButton } from './dictate'
 
 type Decision = { tool_name: string; tool_input: Record<string, any>; at: number }
 type Question = {
@@ -29,12 +34,18 @@ export const BUBBLE: CSSProperties = {
 const USER: CSSProperties = { background: 'var(--raised)', boxShadow: 'inset 3px 0 var(--accent)' }
 const ASSISTANT: CSSProperties = { boxShadow: 'inset 3px 0 var(--claude)' }
 
-/** A saved attachment's path (alone or on an older "Attached file:" line), or the `[file: name]` placeholder of an unsent one. */
-const ATTACHMENT = /(?:^Attached file: )?(\/\S*\/data\/attachments\/[\w-]+\/[\w.-]*[\w-])|\[file: ([^\]\n]+)\]/gm
+/** A saved attachment's path (alone or on an older "Attached file:" line), or an unsent one's placeholder. */
+const ATTACHMENT =
+  /(?:^Attached file: )?(\/\S*\/data\/attachments\/[\w-]+\/[\w.-]*[\w-])|\u2063\u00a0+([^\u2063\n]+?)\u00a0+\u2063|\[file: ([^\]\n]+)\]/gm
 /** A message's text without its attachments, for matching a sent prompt to the message it became. */
 const withoutAttachments = (text: string) => text.replace(ATTACHMENT, '').trim()
-const placeholder = (name: string) => `[file: ${name.replace(/[\]\n]/g, '_')}]`
-const IMAGE = /\.(png|jpe?g|gif|webp)$/i
+/** The file's name padded with no-break spaces between invisible separators, which `trim` keeps: a chip's exact text. */
+const placeholder = (name: string) => `\u2063\u00a0\u00a0${name.replace(/[\u2063\n]/g, '_')}\u00a0\u00a0\u2063`
+/** A file's placeholder as `text` holds it: older drafts have `[file: name]`. */
+const placeholderIn = (text: string, name: string) => {
+  const current = placeholder(name)
+  return text.includes(current) ? current : `[file: ${name.replace(/[\]\n]/g, '_')}]`
+}
 /** The code Zed inlines for an `@file#L1:2` mention, which the message already links to: shown as a fenced code block. */
 const CONTEXT = /<context ref="file:\/\/[^"]*?(?:\.(\w+))?(?:#[^"]*)?">\n?([\s\S]*?)\n?<\/context>/g
 const escapeHtml = (value: string) => value.replace(/[&<>"]/g, c => `&#${c.charCodeAt(0)};`)
@@ -42,7 +53,7 @@ const escapeHtml = (value: string) => value.replace(/[&<>"]/g, c => `&#${c.charC
 /**
  * A transcript message: your messages with an accent bar, Claude's with a Claude-orange bar. `faded` for ones not yet in
  * the transcript. Attachments in your messages show as chips where they appear in the text; saved ones open the file on
- * desktop.
+ * desktop, and images show on hover (see `ImagePeek`).
  */
 export function Bubble({
   role,
@@ -61,22 +72,23 @@ export function Bubble({
 }) {
   const opacity = faded ? 0.5 : undefined
   const mobile = useMobile()
-  const [image, setImage] = useState<string>()
-  const html = useMemo(() => {
+  const { body, html } = useMemo(() => {
     const chips: string[] = []
     const body =
       role === 'user'
-        ? text.replace(CONTEXT, '```$1\n$2\n```').replace(ATTACHMENT, (_, path?: string, name?: string) => {
-            const label = escapeHtml(path?.split('/').pop() ?? name!)
-            chips.push(
-              path && (!mobile || IMAGE.test(path))
-                ? `<button type="button" class="chip file" data-path="${escapeHtml(path)}" title="Open ${escapeHtml(path)}">${label}</button>`
-                : `<button type="button" class="chip file" disabled>${label}</button>`,
-            )
-            return `ATTACHMENTCHIP${chips.length - 1}END`
-          })
+        ? text
+            .replace(CONTEXT, '```$1\n$2\n```')
+            .replace(ATTACHMENT, (_, path?: string, unsent?: string, older?: string) => {
+              const label = escapeHtml(path?.split('/').pop() ?? unsent ?? older!)
+              chips.push(
+                path && (!mobile || IMAGE.test(path) || DOC.test(path))
+                  ? fileChip(path, label)
+                  : `<button type="button" class="chip file" disabled>${label}</button>`,
+              )
+              return `ATTACHMENTCHIP${chips.length - 1}END`
+            })
         : text
-    return renderMarkdown(body).replace(/ATTACHMENTCHIP(\d+)END/g, (_, i) => chips[Number(i)])
+    return { body, html: renderMarkdown(body).replace(/ATTACHMENTCHIP(\d+)END/g, (_, i) => chips[Number(i)]) }
   }, [role, text, mobile])
   return (
     <div style={{ ...BUBBLE, ...(role === 'user' ? USER : ASSISTANT) }}>
@@ -89,8 +101,11 @@ export function Bubble({
           </span>{' '}
           · {label}
         </span>
-        {action && (
-          <span style={{ marginLeft: 'auto', height: 0, display: 'flex', alignItems: 'center' }}>{action}</span>
+        {(action || role !== 'user') && (
+          <span style={{ marginLeft: 'auto', height: 0, display: 'flex', alignItems: 'center' }}>
+            {action}
+            {role !== 'user' && <CopyButton text={text} />}
+          </span>
         )}
       </div>
       <div
@@ -98,56 +113,97 @@ export function Bubble({
         style={{ opacity }}
         data-runnable={onRunCode ? '' : undefined}
         onClick={e => {
-          copyCode(e)
+          copyCode(e, body)
           const code = clickedCode(e.target, '.run-code')
           if (code !== undefined) onRunCode?.(code)
-          const path = (e.target as Element).closest<HTMLElement>('[data-path]')?.dataset.path
-          if (path && IMAGE.test(path)) setImage(path)
-          else if (path) run('sessions.reveal', { path })
         }}
         dangerouslySetInnerHTML={{ __html: html }}
       />
-      {image && <ImageModal path={image} onClose={() => setImage(undefined)} />}
     </div>
   )
 }
-/** A saved image attachment, staged into the database by `sessions.preview` while shown and dropped on close. */
-function ImageModal({ path, onClose }: { path: string; onClose: () => void }) {
-  const id = path.split('/').at(-2)!
-  const [runId, setRunId] = useState<string>()
-  const [error, setError] = useState('')
-  const row = useQuery<{ data: string }>('sessions.attachments', { ids: JSON.stringify([id]) })?.[0]
-  const failed = useQuery<{ state: string }>('core_runs', { id: runId ?? '' })?.[0]?.state === 'failure'
-
-  useEffect(() => {
-    run('sessions.preview', { path }).then(setRunId, (e: Error) => setError(e.message))
-    const close = (e: globalThis.KeyboardEvent) => e.key === 'Escape' && onClose()
-    window.addEventListener('keydown', close)
-    return () => {
-      window.removeEventListener('keydown', close)
-      mutate('sessions.detach', { id })
-    }
-  }, [path])
-
-  const type = path.match(IMAGE)![1].toLowerCase().replace('jpg', 'jpeg')
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
   return (
-    <>
-      <div className="backdrop" onClick={onClose} />
-      <div className="modal image-modal" role="dialog" aria-label={path.split('/').pop()} onClick={onClose}>
-        <button className="icon close" aria-label="Close" onClick={onClose}>
-          ×
-        </button>
-        {row ? (
-          <img src={`data:image/${type};base64,${row.data}`} alt={path.split('/').pop()} />
-        ) : error || failed ? (
-          <div className="empty">{error || 'Could not load the image'}</div>
-        ) : (
-          <div className="empty">
-            <Spinner />
-          </div>
-        )}
-      </div>
-    </>
+    <button
+      type="button"
+      className="ghost icon small"
+      title="Copy this message"
+      aria-label="Copy message"
+      onClick={() =>
+        navigator.clipboard.writeText(text).then(() => {
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1500)
+        })
+      }
+    >
+      <Icon name={copied ? 'check' : 'copy'} />
+    </button>
+  )
+}
+
+/**
+ * Shows the image of a saved (`data-local`) or unsent (`data-staged`) `[data-image]` chip anywhere on the page next to
+ * it, while hovered on desktop or once tapped on phones (until the next tap), until it opens in a preview. Mounted
+ * once by `Root`.
+ */
+export function ImagePeek() {
+  const mobile = useMobile()
+  const [chip, setChip] = useState<HTMLElement>()
+  useEffect(() => {
+    const chipOf = (e: Event) =>
+      e.composedPath().find((el): el is HTMLElement => el instanceof HTMLElement && el.hasAttribute('data-image'))
+    const hover = (e: MouseEvent) => setChip(chipOf(e))
+    const tap = (e: MouseEvent) => {
+      const next = chipOf(e)
+      setChip(current => (next === current ? undefined : next))
+    }
+    const opened = () => setChip(undefined)
+    document.addEventListener(mobile ? 'click' : 'mouseover', mobile ? tap : hover, { capture: true, passive: true })
+    document.addEventListener('open-doc', opened)
+    return () => {
+      document.removeEventListener(mobile ? 'click' : 'mouseover', mobile ? tap : hover, true)
+      document.removeEventListener('open-doc', opened)
+    }
+  }, [mobile])
+  useEffect(() => {
+    if (!chip) return
+    const close = () => setChip(undefined)
+    const escape = (e: globalThis.KeyboardEvent) => e.key === 'Escape' && close()
+    document.addEventListener('scroll', close, { capture: true, passive: true, once: true })
+    window.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('scroll', close, true)
+      window.removeEventListener('keydown', escape)
+    }
+  }, [chip])
+  return chip?.isConnected ? <Peek key={chip.dataset.staged ?? chip.dataset.local} chip={chip} /> : null
+}
+
+function Peek({ chip }: { chip: HTMLElement }) {
+  const { local, staged } = chip.dataset
+  const { src, name, error } = useImage(staged ? unsentPath(staged) : local!)
+  const rect = chip.getBoundingClientRect()
+  const below = rect.top < innerHeight / 2
+  const style = {
+    ...(below ? { top: rect.bottom + 6 } : { bottom: innerHeight - rect.top + 6 }),
+    ...(rect.left < innerWidth / 2
+      ? { left: Math.max(8, rect.left) }
+      : { right: Math.max(8, innerWidth - rect.right) }),
+    ['--room' as string]: `${(below ? innerHeight - rect.bottom : rect.top) - 16}px`,
+  } as CSSProperties
+  return (
+    <div className="image-peek" style={style}>
+      {src ? (
+        <img src={src} alt={name} />
+      ) : error ? (
+        <div className="empty">{error}</div>
+      ) : (
+        <div className="empty">
+          <Spinner />
+        </div>
+      )}
+    </div>
   )
 }
 export const WAITING = ['needs_permission', 'needs_input']
@@ -178,7 +234,10 @@ export const MODELS: Record<string, string> = {
   haiku: 'claude-haiku-5-5',
 }
 
-/** Picks one of `MODELS` by name; `onChange` gets the model's name, `value` is a name too (none shows "Model"). */
+/**
+ * Picks one of `MODELS` by name; `onChange` gets the model's name, `value` is a name too (none shows "Model"). A text
+ * field focused before it opened gets focus back once a model is picked.
+ */
 export function ModelSelect({
   value,
   onChange,
@@ -190,6 +249,7 @@ export function ModelSelect({
   className?: string
   disabled?: boolean
 }) {
+  const typing = useRef<HTMLElement | null>(null)
   return (
     <select
       className={className}
@@ -197,7 +257,14 @@ export function ModelSelect({
       title="Change model"
       disabled={disabled}
       value={value ?? ''}
-      onChange={e => onChange(e.target.value, MODELS[e.target.value])}
+      onPointerDown={() => {
+        const focused = document.activeElement
+        typing.current = focused instanceof HTMLTextAreaElement || focused instanceof HTMLInputElement ? focused : null
+      }}
+      onChange={e => {
+        onChange(e.target.value, MODELS[e.target.value])
+        typing.current?.focus()
+      }}
     >
       {!value && <option value="">Model</option>}
       {Object.keys(MODELS).map(name => (
@@ -404,9 +471,10 @@ export function withAttachments<K extends string>(param: K, prompt: string, file
   let text = prompt
   const used: Attachment[] = []
   for (const f of files) {
-    if (!text.includes(placeholder(f.name))) void mutate('sessions.detach', { id: f.id })
+    const mark = placeholderIn(text, f.name)
+    if (!text.includes(mark)) void mutate('sessions.detach', { id: f.id })
     else {
-      text = text.replace(placeholder(f.name), `{{attachment:${f.id}}}`)
+      text = text.replace(mark, `{{attachment:${f.id}}}`)
       used.push(f)
     }
   }
@@ -467,8 +535,9 @@ export function QueuedMessage({ session, onError }: { session: Session; onError:
 
 /**
  * A rounded message box over drafts kept under `draft` and `files` (see `useDraft`). Files are attached by pasting,
- * dropping or picking them, and show in the text as placeholders where they were added. Send (or ⌘↩) calls `onSend`,
- * which clears the drafts when it takes the message; `button` replaces the send icon and `actions` sit before it.
+ * dropping or picking them, and are placeholders in the text where they were added, drawn as chips by a layer over the
+ * textarea and edited as one character. Send (or ⌘↩) calls `onSend`, which clears the drafts when it takes the message;
+ * `button` replaces the send icon and `actions` sit before it.
  */
 export function MessageBox({
   draft,
@@ -525,38 +594,87 @@ export function MessageBox({
     })
   }
   const [filesDraft, setFilesDraft] = useDraft(filesKey)
-  const [uploading, setUploading] = useState(0)
+  const [uploading, setUploading] = useState<string[]>([])
+  const [dictating, setDictating] = useState(false)
   const picker = useRef<HTMLInputElement>(null)
   const box = useRef<HTMLTextAreaElement>(null)
+  const layer = useRef<HTMLDivElement>(null)
   const mobile = useMobile()
+  const selection = useRef([0, 0])
+  const chips = useMemo(() => {
+    const found: { start: number; end: number; name: string; id?: string }[] = []
+    for (const file of [...parseFiles(filesDraft), ...uploading.map(name => ({ name, id: undefined }))]) {
+      const mark = placeholderIn(text, file.name)
+      let start = text.indexOf(mark)
+      while (found.some(c => c.start === start)) start = text.indexOf(mark, start + 1)
+      if (start >= 0) found.push({ ...file, start, end: start + mark.length })
+    }
+    return found.sort((a, b) => a.start - b.start)
+  }, [text, filesDraft, uploading])
+  useLayoutEffect(() => {
+    if (!layer.current || !box.current) return
+    layer.current.style.padding = getComputedStyle(box.current).padding
+    layer.current.scrollTop = box.current.scrollTop
+  }, [chips, mobile])
   useEffect(() => {
     if (!mobile) box.current?.focus()
   }, [draft])
   const attach = (list: FileList | null) => {
-    const files = [...(list ?? [])]
+    const names = new Set([...parseFiles(filesDraft).map(f => f.name), ...uploading])
+    const files = [...(list ?? [])].map(file => {
+      const [, stem, extension] = /^(.*?)(\.[^.]*)?$/.exec(file.name || 'file')!
+      let name = file.name || 'file'
+      for (let n = 2; names.has(name) || text.includes(placeholder(name)); n++) name = `${stem}-${n}${extension ?? ''}`
+      names.add(name)
+      return new File([file], name, { type: file.type })
+    })
     if (!files.length) return
     const at = box.current?.selectionStart ?? text.length
     setText(text.slice(0, at) + files.map(file => placeholder(file.name)).join(' ') + text.slice(at))
-    setUploading(n => n + files.length)
+    setUploading(current => [...current, ...files.map(file => file.name)])
     for (const file of files)
       upload(file)
         .then(({ id }) => setFilesDraft(current => JSON.stringify([...parseFiles(current), { id, name: file.name }])))
         .catch((e: Error) => onError(e.message))
-        .finally(() => setUploading(n => n - 1))
+        .finally(() => setUploading(current => current.filter(name => name !== file.name)))
+  }
+  // May be called after the box moved on to another draft, whose caret says nothing about this one.
+  const insertSpeech = (speech: string) => {
+    let end: number | undefined
+    let at = 0
+    let inserted = ''
+    let replaced = ''
+    setText(current => {
+      const el = box.current?.value === current ? box.current : null
+      const [from, to] = el ? [el.selectionStart, el.selectionEnd] : [current.length, current.length]
+      const lead = /\S$/.test(current.slice(0, from)) ? ' ' : ''
+      at = from
+      inserted = lead + speech + (/^\S/.test(current.slice(to)) ? ' ' : '')
+      replaced = current.slice(from, to)
+      if (el) end = from + lead.length + speech.length
+      return current.slice(0, from) + inserted + current.slice(to)
+    })
+    requestAnimationFrame(() => {
+      const el = box.current
+      // Selecting in an unfocused box would open the phone's keyboard.
+      if (el && end !== undefined && (!mobile || document.activeElement === el)) el.setSelectionRange(end, end)
+    })
+    // Left alone if it was edited since.
+    return () =>
+      setText(current => {
+        const found = current.startsWith(inserted, at) ? at : current.lastIndexOf(inserted)
+        return found < 0 ? current : current.slice(0, found) + replaced + current.slice(found + inserted.length)
+      })
   }
   const send = () => {
-    if (uploading) return
+    if (uploading.length || dictating) return
     for (const [, used] of text.matchAll(/(?:^|\s)\/(\S+)/g))
       if (commands.includes(used)) mutate('sessions.command_used', { name: used }).catch(console.error)
     onSend(text.trim(), parseFiles(filesDraft))
+    if (mobile) box.current?.blur()
   }
   return (
     <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
-      {uploading > 0 && (
-        <span className="chip file" style={{ marginBottom: 6 }}>
-          <Spinner />
-        </span>
-      )}
       {matches.length > 0 && (
         <div className="folder-list" role="listbox">
           {matches.map((name, i) => (
@@ -601,38 +719,106 @@ export function MessageBox({
             e.target.value = ''
           }}
         />
-        <textarea
-          ref={box}
-          value={text}
-          onChange={e => {
-            setText(e.target.value)
-            setCaret(e.target.selectionStart)
-            setActive(0)
-          }}
-          onSelect={e => setCaret(e.currentTarget.selectionStart)}
-          onKeyDown={e => {
-            if (matches.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
-              e.preventDefault()
-              setActive((highlighted + (e.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length)
-            } else if (matches.length && (e.key === 'Tab' || (e.key === 'Enter' && !e.metaKey))) {
-              e.preventDefault()
-              pickCommand(matches[highlighted])
-            } else if (matches.length && e.key === 'Escape') {
-              e.preventDefault()
-              e.stopPropagation()
-              setDismissed(text)
-            } else if (e.key === 'Enter' && e.metaKey) {
-              e.preventDefault()
-              send()
-            } else onKeyDown?.(e)
-          }}
-          placeholder={hint}
-          autoComplete="off"
-          enterKeyHint="enter"
-          rows={1}
-        />
-        {actions}
-        <span className="composer-buttons">
+        <div className="composer-field" data-chips={chips.length ? '' : undefined}>
+          <textarea
+            ref={box}
+            value={text}
+            onChange={e => {
+              setText(e.target.value)
+              setCaret(e.target.selectionStart)
+              selection.current = [e.target.selectionStart, e.target.selectionEnd]
+              setActive(0)
+            }}
+            onSelect={e => {
+              const { selectionStart, selectionEnd, selectionDirection } = e.currentTarget
+              const [start, end] = [selectionStart, selectionEnd].map((at, side) => {
+                const chip = chips.find(c => c.start < at && at < c.end)
+                if (!chip) return at
+                const before = selection.current[side]
+                if (before === chip.start) return chip.end
+                if (before === chip.end) return chip.start
+                if (selectionStart !== selectionEnd) return side ? chip.end : chip.start
+                return at - chip.start < chip.end - at ? chip.start : chip.end
+              })
+              selection.current = [start, end]
+              if (start !== selectionStart || end !== selectionEnd)
+                e.currentTarget.setSelectionRange(start, end, selectionDirection)
+              setCaret(start)
+            }}
+            onScroll={e => layer.current && (layer.current.scrollTop = e.currentTarget.scrollTop)}
+            onKeyDown={e => {
+              const { selectionStart: at, selectionEnd, selectionDirection } = e.currentTarget
+              if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.metaKey && !e.ctrlKey) {
+                const left = e.key === 'ArrowLeft'
+                const collapsed = at === selectionEnd
+                const backward = selectionDirection === 'backward' || (selectionDirection === 'none' && left)
+                const from = collapsed || backward ? at : selectionEnd
+                const chip = chips.find(c => (left ? c.end : c.start) === from)
+                if (chip && (e.shiftKey || collapsed)) {
+                  e.preventDefault()
+                  const to = left ? chip.start : chip.end
+                  const anchor = !e.shiftKey ? to : collapsed ? at : backward ? selectionEnd : at
+                  const [start, end] = [Math.min(anchor, to), Math.max(anchor, to)]
+                  selection.current = [start, end]
+                  e.currentTarget.setSelectionRange(start, end, to < anchor ? 'backward' : 'forward')
+                  return
+                }
+              }
+              if (at === selectionEnd && !e.metaKey && (e.key === 'Backspace' || e.key === 'Delete')) {
+                const chip = chips.find(c => (e.key === 'Backspace' ? c.end : c.start) === at)
+                // Not prevented: the browser deletes the selected chip itself, which keeps ⌘Z working
+                if (chip) e.currentTarget.setSelectionRange(chip.start, chip.end)
+              }
+              if (matches.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                e.preventDefault()
+                setActive((highlighted + (e.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length)
+              } else if (matches.length && (e.key === 'Tab' || (e.key === 'Enter' && !e.metaKey))) {
+                e.preventDefault()
+                pickCommand(matches[highlighted])
+              } else if (matches.length && e.key === 'Escape') {
+                e.preventDefault()
+                e.stopPropagation()
+                setDismissed(text)
+              } else if (e.key === 'Enter' && e.metaKey) {
+                e.preventDefault()
+                send()
+              } else onKeyDown?.(e)
+            }}
+            placeholder={hint}
+            autoComplete="off"
+            enterKeyHint="enter"
+            rows={1}
+          />
+          {chips.length > 0 && (
+            <div ref={layer} className="composer-layer" aria-hidden="true">
+              {chips.map(({ start, end, name, id }, i) => (
+                <Fragment key={id ?? name}>
+                  {text.slice(chips[i - 1]?.end ?? 0, start)}
+                  <span
+                    className="composer-chip"
+                    data-staged={id}
+                    data-image={id && IMAGE.test(name) ? '' : undefined}
+                    onMouseDown={e => {
+                      e.preventDefault()
+                      box.current?.focus()
+                      box.current?.setSelectionRange(end, end)
+                    }}
+                    onClick={e => {
+                      if (id && IMAGE.test(name)) sendOpenDoc(e.currentTarget, unsentPath(id))
+                    }}
+                  >
+                    {text.slice(start, end)}
+                  </span>
+                </Fragment>
+              ))}
+              {text.slice(chips[chips.length - 1].end)}
+              {'\u200b'}
+            </div>
+          )}
+        </div>
+        {/* On phones, blurring the box folds this row, which would move a button out from under the tap. */}
+        <span className="composer-buttons" onMouseDown={e => mobile && e.preventDefault()}>
+          {actions}
           <button
             type="button"
             className="ghost icon round attach"
@@ -642,7 +828,8 @@ export function MessageBox({
           >
             <PaperclipIcon />
           </button>
-          {onStop && !text.trim() ? (
+          <DictateButton key={draft} insert={insertSpeech} onActive={setDictating} onError={onError} />
+          {onStop && !text.trim() && !dictating ? (
             <button type="button" className="primary icon round send" title="Stop" aria-label="Stop" onClick={onStop}>
               <StopIcon />
             </button>
@@ -650,7 +837,7 @@ export function MessageBox({
             <button
               type="submit"
               className="primary icon round send"
-              disabled={!text.trim() || uploading > 0}
+              disabled={!text.trim() || uploading.length > 0 || dictating}
               title="Send"
               aria-label="Send"
             >

@@ -151,7 +151,7 @@ export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?
         {tiles.map(tile => (
           <div
             key={tile.id}
-            className="tile fade-in"
+            className="tile"
             style={tile.list_h ? { ...LIST_TILE, height: tile.list_h * LIST_ROW_HEIGHT } : LIST_TILE}
           >
             <div className="tile-bar" data-card={tile.component}>
@@ -188,7 +188,7 @@ export default function Grid({ grid, layout }: CardProps<{ grid: string; layout?
               zIndex: drag?.id === box.id ? 1 : undefined,
             }}
           >
-            <div className={drag?.id === box.id ? 'tile fade-in dragging' : 'tile fade-in'}>
+            <div className={drag?.id === box.id ? 'tile dragging' : 'tile'}>
               <div
                 data-drag
                 onPointerDown={e => startDrag(e, box, 'move')}

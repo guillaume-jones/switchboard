@@ -1,8 +1,10 @@
 # Switchboard folder
 
-The Switchboard app loads this folder on every save. Run `swb check` before you finish: it is the same loader the app and the pre-commit hook run. While a session working in this folder is mid-turn, the app waits to load it until the turn ends, so files can change in any order. A change that fails to load never replaces the running state; its errors go to `core_events` and are raised as attention items, and a turn ending with them is sent back to you once to fix.
+The Switchboard app loads this folder on every save. Run `swb check` before you finish: it is the same loader the app and the pre-commit hook run. A passing `swb check` is enough verification: don't try changes in the app, and don't report that you haven't. While a session working in this folder is mid-turn, the app waits to load it until the turn ends, so files can change in any order. A change that fails to load never replaces the running state; its errors go to `core_events` and are raised as attention items, and a turn ending with them is sent back to you once to fix.
 
 Commit your own changes on `main` once `swb check` passes, without asking: stage only the files you changed. Never push.
+
+Format with `npx oxfmt <files>` (config in `.oxfmtrc.json`), never prettier.
 
 ## Layout
 
@@ -182,3 +184,5 @@ swb run stop <run_id>
 ## Existing sources and cards
 
 Read `sources/` and `cards/` before adding anything; extend what is there. To show a card on the main board: `swb write ui.tile_add grid=main id=<id> component=<Card> 'props="{}"'`. The default layout is the `ui_defaults` view; `ui.reset {grid}` replaces a grid's tiles with it.
+
+`sources/github/files/fix_failing.json` is an example rule that is off: it starts an agent that fixes and pushes to the user's PRs with failing CI or merge conflicts, spending their Claude usage. Only when the user asks for it, copy it to `sources/github/rules/` to turn it on.

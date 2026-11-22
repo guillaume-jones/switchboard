@@ -1,1 +1,1 @@
-{ "id": "sessions-expire", "when": { "schedule": "* * * * *" }, "run": "sessions.expire", "log": false }
+{ "id": "sessions-expire", "when": { "schedule": "*/5 * * * *" }, "run": "sessions.expire", "log": false }

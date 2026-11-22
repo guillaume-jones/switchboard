@@ -8,8 +8,10 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { mutate, run, useQuery, type CardProps } from 'switchboard'
+import { Disclosure } from './lib/disclosure'
+import { Icon } from './lib/icons'
 import { useMobile } from './lib/theme'
-import { clip, Combobox, linkTone, LinkPicker, NEW, type Option } from './lib/links'
+import { clip, linkTone, LinkPicker } from './lib/links'
 
 type Todo = {
   id: number
@@ -17,7 +19,6 @@ type Todo = {
   title: string
   description: string
   due: string | null
-  tags: string
   position: number
   done: number
   done_at: number | null
@@ -29,10 +30,9 @@ type Link = {
   label: string | null
   title: string
   status: string | null
+  project_folder?: string | null
 }
 
-const TAG_TONES: Record<string, string | undefined> = { blocked: 'bad', 'on hold': 'warn', background: 'faint' }
-const tagTone = (tag: string) => (tag in TAG_TONES ? TAG_TONES[tag] : 'info')
 const SESSION = 'sessions:'
 const PROJECT = 'workstreams:'
 const DONE_LIMIT = 50
@@ -46,28 +46,39 @@ const dueTone = (due: string) => {
   return due < today ? 'bad' : due === today ? 'warn' : undefined
 }
 
+const NOW = 'default'
 const LATER = 'later'
-const DIVIDER = -1
+/** The sections below Now. Their headers are sorted along with the to-dos, under negative ids. */
+const GROUPS = [
+  { id: -1, list: LATER, label: 'Later' },
+  { id: -2, list: 'blocked', label: 'Blocked' },
+]
 
 /**
- * To-dos of one `list` in `workstreams`, ordered by dragging their handles; each ties together chats, projects and links.
- * With `addCommand`, the add box runs that command with `{ text }` instead of adding a to-do. With `project`, the
- * project's to-dos instead: those in any list but `later` (on Main when in `default`), then those in `later`; dragging
- * across the divider moves a to-do between Now (`default`) and Later.
+ * To-dos from `workstreams`, ordered by dragging their handles; each ties together chats, projects, PRs and links. The main
+ * list and a project's (`project`) split into Now, Later and Blocked: a drag moves between them, and dropping on a
+ * collapsed section's header puts the to-do on top of it. Any other `list` is flat. With `addCommand`, the add box runs
+ * that command with `{ text }` instead of adding a to-do.
  */
 export default function TodoList({
-  list = 'default',
+  list = NOW,
   project,
   addCommand,
   placeholder = 'Add a to-do',
+  slot,
 }: CardProps<{ list?: string; project?: number; addCommand?: string; placeholder?: string }>) {
+  const sectioned = !!project || list === NOW
   const rows = useQuery<Todo>(
-    project ? 'workstreams_project_items' : 'workstreams_items',
-    project ? { project } : { list },
+    project ? 'workstreams_project_items' : sectioned ? 'workstreams_todos' : 'workstreams_items',
+    project ? { project } : sectioned ? {} : { list },
   )
   const projectRef = project && `workstreams:${project}`
-  const links = (useQuery<Link>('workstreams_links') ?? []).filter(l => l.ref !== projectRef)
-  const tags = (useQuery<{ name: string }>('workstreams_tags') ?? []).map(t => t.name)
+  const allLinks = useQuery<Link>('workstreams_links') ?? []
+  const expandedKey = `Todo.expanded:${slot}`
+  const [expanded, setExpanded] = useState<string[]>(() =>
+    JSON.parse(localStorage.getItem(expandedKey) ?? JSON.stringify(project ? [LATER] : [])),
+  )
+  const [folding, setFolding] = useState<string[]>([])
   const [moved, setMoved] = useState(new Map<number, { position: number; list: string }>())
   const [open, setOpen] = useState<number>()
   const [showDone, setShowDone] = useState(false)
@@ -91,18 +102,24 @@ export default function TodoList({
   const position = (todo: Todo) => moved.get(todo.id)?.position ?? todo.position
   const listOf = (todo: Todo) => moved.get(todo.id)?.list ?? todo.list
   const pending = (rows ?? []).filter(t => !t.done).sort((a, b) => position(a) - position(b))
-  const todos = project ? pending.filter(t => listOf(t) !== LATER) : pending
-  const later = project ? pending.filter(t => listOf(t) === LATER) : []
-  const order = project ? [...todos.map(t => t.id), DIVIDER, ...later.map(t => t.id)] : todos.map(t => t.id)
+  const groups = sectioned ? GROUPS : []
+  const sectionOf = (todo: Todo) => groups.find(g => g.list === listOf(todo))?.list ?? NOW
+  const inSection = (section: string) => pending.filter(t => sectionOf(t) === section)
+  const now = inSection(NOW)
+  const sections = groups.map(g => {
+    const todos = inSection(g.list)
+    const shown = expanded.includes(g.list)
+    return { ...g, todos, shown, rendered: shown || folding.includes(g.list) }
+  })
+  const order = [...now.map(t => t.id), ...sections.flatMap(g => [g.id, ...(g.rendered ? g.todos.map(t => t.id) : [])])]
   const done = (rows ?? []).filter(t => t.done).sort((a, b) => (b.done_at ?? 0) - (a.done_at ?? 0))
 
   const move = (id: number, to: number) => {
     const todo = pending.find(t => t.id === id)!
     const others = order.filter(o => o !== id)
-    const split = project ? others.indexOf(DIVIDER) : others.length
-    const toLater = !!project && to > split
-    const neighbour = (i: number) => pending.find(t => t.id === others[i] && others[i] !== DIVIDER)
-    const [before, after] = [neighbour(to - 1), neighbour(to)]
+    const section = sections.findLast(g => others.slice(0, to).includes(g.id))?.list ?? NOW
+    const [before, after] = [to - 1, to].map(i => pending.find(t => t.id === others[i]))
+    const rest = inSection(section).filter(t => t.id !== id)
     const at =
       before && after
         ? (position(before) + position(after)) / 2
@@ -110,9 +127,10 @@ export default function TodoList({
           ? position(before) + 1
           : after
             ? position(after) - 1
-            : 0
-    const current = listOf(todo)
-    const target = toLater ? LATER : current === LATER ? 'default' : current
+            : rest.length
+              ? position(rest[0]) - 1
+              : 0
+    const target = sectionOf(todo) === section ? listOf(todo) : section
     setMoved(m => new Map(m).set(id, { position: at, list: target }))
     mutate('workstreams.move', { id, position: at, list: target }).catch((e: Error) => {
       setMoved(m => (m.delete(id), new Map(m)))
@@ -120,6 +138,16 @@ export default function TodoList({
     })
   }
   const sortable = useSortable(order, move)
+  const toggle = (section: string) => {
+    const shown = expanded.includes(section)
+    const next = shown ? expanded.filter(s => s !== section) : [...expanded, section]
+    if (shown) {
+      setFolding(f => [...f, section])
+      setTimeout(() => setFolding(f => f.filter(s => s !== section)), LEAVE_MS)
+    }
+    setExpanded(next)
+    localStorage.setItem(expandedKey, JSON.stringify(next))
+  }
 
   const add = () => {
     if (!title.trim()) return
@@ -137,23 +165,24 @@ export default function TodoList({
     added.then(() => setTitle(''), fail)
   }
 
-  const row = (todo: Todo) => (
+  const row = (todo: Todo, folded = false) => (
     <Row
       key={todo.id}
       todo={todo}
-      links={links.filter(l => l.item === todo.id)}
-      tags={tags}
+      links={allLinks.filter(l => l.item === todo.id && l.ref !== projectRef)}
+      cwd={allLinks.find(l => l.item === todo.id && l.project_folder)?.project_folder ?? ''}
       open={open === todo.id}
       onToggle={() => setOpen(open === todo.id ? undefined : todo.id)}
       dragging={sortable.dragging === todo.id}
       handle={todo.done ? undefined : sortable.handle(todo.id)}
       appear={loaded.current}
+      folded={folded}
       onError={fail}
     />
   )
 
   return (
-    <div>
+    <div className="todo-list">
       <form
         className="todo-add"
         onSubmit={e => {
@@ -177,30 +206,33 @@ export default function TodoList({
         </div>
       )}
       {rows && pending.length === 0 && <div className="empty idle">Nothing to do</div>}
-      {project && pending.length > 0 && (
-        <div className="todo-section heading" title="Also on Main">
-          Now
-        </div>
-      )}
+      {sectioned && <div className="todo-now">Now</div>}
       <div ref={sortable.list}>
-        {todos.map(row)}
-        {project && pending.length > 0 && (
-          <div className="todo-section heading" title="Drag a to-do above this line to put it on Main">
-            Later
-          </div>
-        )}
-        {later.map(row)}
+        {/* one array, so a row dragged into another section keeps its element */}
+        {[
+          ...now.map(t => row(t)),
+          ...sections.flatMap(({ id, list, label, todos, shown, rendered }) => {
+            return [
+              <button
+                key={id}
+                className="ghost disclosure"
+                data-collapsed={rendered ? undefined : ''}
+                aria-expanded={shown}
+                onClick={() => toggle(list)}
+              >
+                <Icon name="chevron-right" />
+                {label} <span className="count">{todos.length}</span>
+              </button>,
+              ...(rendered ? todos.map(t => row(t, !shown)) : []),
+            ]
+          }),
+        ]}
       </div>
       {done.length > 0 && (
-        <div className="show-more">
-          <button className="ghost" onClick={() => setShowDone(!showDone)}>
-            {showDone ? 'Hide done' : `Show done (${done.length})`}
-          </button>
-        </div>
+        <Disclosure label="Done" count={done.length} open={showDone} onToggle={() => setShowDone(!showDone)}>
+          {done.slice(0, DONE_LIMIT).map(t => row(t))}
+        </Disclosure>
       )}
-      <div className="collapse" data-open={showDone ? '' : undefined}>
-        <div>{done.slice(0, DONE_LIMIT).map(row)}</div>
-      </div>
     </div>
   )
 }
@@ -214,6 +246,7 @@ type Drag = {
   rows: HTMLElement[]
   tops: number[]
   heights: number[]
+  bounds: DOMRect[] // on screen when picked up
   startY: number
   y: number
   startScroll: number
@@ -229,7 +262,8 @@ const scrollParent = (el: HTMLElement): HTMLElement => {
 
 /**
  * Drag to reorder the children of `list`: rows move by transforms written straight to the DOM every frame, so React
- * only renders on pick-up and drop, and the dropped row glides from where it was let go into its new slot.
+ * only renders on pick-up and drop, and the dropped row glides from where it was let go into its new slot. A child
+ * marked `data-collapsed` takes drops on itself: it stays put until the pointer is past it, and lights up under it.
  */
 function useSortable(ids: number[], onMove: (id: number, to: number) => void) {
   const list = useRef<HTMLDivElement>(null)
@@ -243,6 +277,10 @@ function useSortable(ids: number[], onMove: (id: number, to: number) => void) {
     settle.current = undefined
     const rows = [...list.current.children] as HTMLElement[]
     rows.forEach(r => Object.assign(r.style, { transition: 'none', transform: '' }))
+    if (!dropped.el.isConnected) {
+      requestAnimationFrame(() => rows.forEach(r => (r.style.transition = '')))
+      return
+    }
     dropped.el.style.transform = `translateY(${dropped.top - dropped.el.offsetTop}px)`
     dropped.el.getBoundingClientRect()
     rows.forEach(r => (r.style.transition = ''))
@@ -259,9 +297,24 @@ function useSortable(ids: number[], onMove: (id: number, to: number) => void) {
     const height = d.heights[d.from]
     const top = d.tops[d.from] + d.offset
     const middle = (i: number) => d.tops[i] + d.heights[i] / 2
-    d.to = d.rows.filter((_, i) => (i < d.from ? middle(i) <= top : i > d.from && middle(i) < top + height)).length
+    let to = d.rows.filter((_, i) => (i < d.from ? middle(i) <= top : i > d.from && middle(i) < top + height)).length
+    const pointer = d.y + d.scroller.scrollTop - d.startScroll
     d.rows.forEach((r, i) => {
-      const shift = i === d.from ? d.offset : i > d.from && i <= d.to ? -height : i < d.from && i >= d.to ? height : 0
+      if (i === d.from || r.dataset.collapsed === undefined) return
+      const below = i > d.from
+      const { top, bottom } = d.bounds[i]
+      if (pointer >= top && pointer <= bottom) to = below ? i : i + 1
+      else if (below && pointer < top) to = Math.min(to, i - 1)
+      else if (!below && pointer > bottom) to = Math.max(to, i + 1)
+    })
+    d.to = to
+    const previous = d.rows.filter((_, i) => i !== d.from)[to - 1]
+    const into = previous?.dataset.collapsed !== undefined ? previous : undefined
+    d.el.toggleAttribute('data-into', !!into)
+    d.rows.forEach((r, i) => {
+      r.toggleAttribute('data-drop', r === into)
+      const shift =
+        i === d.from ? d.offset : into ? 0 : i > d.from && i <= to ? -height : i < d.from && i >= to ? height : 0
       r.style.transform = shift ? `translateY(${shift}px)` : ''
     })
   }
@@ -282,6 +335,7 @@ function useSortable(ids: number[], onMove: (id: number, to: number) => void) {
       rows,
       tops: rows.map(r => r.offsetTop),
       heights: rows.map(r => r.offsetHeight),
+      bounds: rows.map(r => r.getBoundingClientRect()),
       startY: e.clientY,
       y: e.clientY,
       startScroll: scroller.scrollTop,
@@ -309,6 +363,8 @@ function useSortable(ids: number[], onMove: (id: number, to: number) => void) {
     drag.current = undefined
     cancelAnimationFrame(d.frame)
     layout(d)
+    d.el.removeAttribute('data-into')
+    d.rows.forEach(r => r.removeAttribute('data-drop'))
     settle.current = { el: d.el, top: d.tops[d.from] + d.offset }
     setDragging(undefined)
     if (d.to !== d.from) onMove(d.id, d.to)
@@ -335,22 +391,24 @@ function useSortable(ids: number[], onMove: (id: number, to: number) => void) {
 function Row({
   todo,
   links,
-  tags,
+  cwd,
   open,
   onToggle,
   dragging,
   handle,
   appear,
+  folded,
   onError,
 }: {
   todo: Todo
   links: Link[]
-  tags: string[]
+  cwd: string
   open: boolean
   onToggle: () => void
   dragging: boolean
   handle?: ReturnType<ReturnType<typeof useSortable>['handle']>
   appear: boolean
+  folded: boolean
   onError: (e: Error) => void
 }) {
   const [entering] = useState(appear)
@@ -360,16 +418,17 @@ function Row({
     setLeaving(true)
     setTimeout(() => write().catch((e: Error) => (setLeaving(false), setTicked(false), onError(e))), LEAVE_MS)
   }
-  const own: string[] = JSON.parse(todo.tags)
   const [mounted, setMounted] = useState(open)
   if (open && !mounted) setMounted(true)
   const chats = links.filter(l => l.kind === 'session')
-  const urls = links.filter(l => l.kind === 'url')
   const projects = links.filter(l => l.kind === 'project')
+  const prs = links.filter(l => l.kind === 'pr')
+  const urls = links.filter(l => l.kind === 'url')
   const focusTitle = useRef<number | undefined>(undefined)
+  const collapse = () => open && onToggle()
   const countChip = (items: Link[], label: string, tone?: string) =>
     items.length === 1 ? (
-      <LinkAnchor link={items[0]} onError={onError} className="badge" data-tone={tone} style={LINK}>
+      <LinkAnchor link={items[0]} onError={onError} onOpen={collapse} className="badge" data-tone={tone} style={LINK}>
         {label}
       </LinkAnchor>
     ) : (
@@ -389,6 +448,7 @@ function Row({
       await mutate('sessions.draft_set', { key: 'NewChat.prompt', text: prompt })
       await mutate('sessions.draft_set', { key: 'NewChat.links', text: JSON.stringify(chatLinks) })
       await mutate('sessions.draft_set', { key: 'NewChat.todo', text: String(todo.id) })
+      await mutate('sessions.draft_set', { key: 'NewChat.cwd', text: cwd })
       await mutate('ui.open_chat', { client, session: '' })
     } catch (e) {
       onError(e as Error)
@@ -397,7 +457,14 @@ function Row({
 
   return (
     <div
-      className={['todo-row', dragging && 'dragging', todo.done && 'done', entering && 'appear', leaving && 'leaving']
+      className={[
+        'todo-row',
+        dragging && 'dragging',
+        todo.done && 'done',
+        entering && 'appear',
+        (leaving || folded) && 'leaving',
+        folded && 'folded',
+      ]
         .filter(Boolean)
         .join(' ')}
     >
@@ -443,7 +510,7 @@ function Row({
                 aria-label="Title"
                 title="Rename"
                 className="inline-edit title"
-                style={{ display: 'block', width: '100%', fontWeight: 600 }}
+                style={{ display: 'block' }}
                 onClick={e => e.stopPropagation()}
                 onKeyDown={e => {
                   if (e.key === 'Enter') e.currentTarget.blur()
@@ -463,7 +530,6 @@ function Row({
             ) : (
               <div
                 className="title"
-                style={{ fontWeight: 600 }}
                 onClick={e => {
                   focusTitle.current =
                     document.caretRangeFromPoint?.(e.clientX, e.clientY)?.startOffset ?? todo.title.length
@@ -474,34 +540,30 @@ function Row({
             )}
             {todo.description && (
               <div className="collapse" data-open={open ? undefined : ''}>
-                <div style={{ color: 'var(--muted)', fontSize: 12, textOverflow: 'ellipsis' }}>
-                  {todo.description.split('\n')[0]}
-                </div>
+                <div className="todo-note">{todo.description.split('\n')[0]}</div>
               </div>
             )}
-            {(own.length > 0 || links.length > 0 || todo.due) && (
+            {(links.length > 0 || todo.due) && (
               <div className="collapse" data-open={open ? undefined : ''}>
                 <div>
                   <div className="todo-chips" style={{ paddingTop: 4 }}>
-                    {own.map(tag => (
-                      <span key={tag} className="badge" data-tone={tagTone(tag)}>
-                        {tag}
-                      </span>
-                    ))}
                     {projects.map(l => (
                       <LinkAnchor
                         key={l.ref}
                         link={l}
                         onError={onError}
+                        onOpen={collapse}
                         className="badge"
                         data-tone={linkTone(l)}
                         style={LINK}
                       >
-                        {l.title}
+                        <Icon name="briefcase" />
+                        {clip(l.title)}
                       </LinkAnchor>
                     ))}
-                    {countChip(urls, urls.length > 1 ? `Link ×${urls.length}` : 'Link')}
                     {countChip(chats, chats.length === 1 ? '1 chat' : `${chats.length} chats`)}
+                    {countChip(prs, prs.length === 1 ? '1 PR' : `${prs.length} PRs`)}
+                    {countChip(urls, urls.length === 1 ? '1 link' : `${urls.length} links`)}
                     {todo.due && (
                       <span className="badge" data-tone={tone}>
                         {formatDue(todo.due)}
@@ -512,16 +574,18 @@ function Row({
               </div>
             )}
           </div>
-          <button
-            className="icon ghost"
-            title="New chat about this to-do"
-            onClick={e => {
-              e.stopPropagation()
-              newChat()
-            }}
-          >
-            ✦
-          </button>
+          {!open && (
+            <button
+              className="icon ghost"
+              title="New chat about this to-do"
+              onClick={e => {
+                e.stopPropagation()
+                newChat()
+              }}
+            >
+              ✦
+            </button>
+          )}
           {open && (
             <span className="todo-actions fade-in">
               <button
@@ -556,9 +620,7 @@ function Row({
           onTransitionEnd={e => e.target === e.currentTarget && !open && setMounted(false)}
         >
           <div>
-            {mounted && (
-              <Details todo={todo} own={own} tags={tags} links={links} onNewChat={newChat} onError={onError} />
-            )}
+            {mounted && <Details todo={todo} links={links} onNewChat={newChat} onOpen={collapse} onError={onError} />}
           </div>
         </div>
       </div>
@@ -569,8 +631,13 @@ function Row({
 function LinkAnchor({
   link,
   onError,
+  onOpen,
   ...rest
-}: { link: Link; onError: (e: Error) => void } & Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'onError'>) {
+}: {
+  link: Link
+  onError: (e: Error) => void
+  onOpen?: () => void
+} & Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'onError'>) {
   const client = useMobile() ? 'mobile' : 'desktop'
   return link.kind === 'session' || link.kind === 'project' ? (
     <a
@@ -580,6 +647,8 @@ function LinkAnchor({
       onClick={e => {
         e.preventDefault()
         e.stopPropagation()
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+        onOpen?.()
         if (link.kind === 'project')
           mutate('ui.open_project', { client, project: Number(link.ref.slice(PROJECT.length)) }).catch(onError)
         else mutate('ui.open_chat', { client, session: link.ref.slice(SESSION.length) }).catch(onError)
@@ -599,45 +668,36 @@ function LinkAnchor({
 
 function Details({
   todo,
-  own,
-  tags,
   links,
   onNewChat,
+  onOpen,
   onError,
 }: {
   todo: Todo
-  own: string[]
-  tags: string[]
   links: Link[]
   onNewChat: () => void
+  onOpen: () => void
   onError: (e: Error) => void
 }) {
   const update = (field: string, value: string) =>
     mutate('workstreams.update', { id: todo.id, field, value }).catch(onError)
-  const setTags = (next: string[]) =>
-    mutate('workstreams.set_tags', { id: todo.id, tags: JSON.stringify(next) }).catch(onError)
   const link = (ref: string, kind: string, label: string) =>
     mutate('workstreams.link_add', { item: todo.id, ref, kind, label }).catch(onError)
 
   return (
     <div className="todo-details">
-      <div className="todo-chips">
-        <span className="todo-label">Due</span>
-        <input
-          type="date"
-          value={todo.due ?? ''}
-          onChange={e => update('due', e.target.value)}
-          aria-label="Due date"
-          data-empty={todo.due ? undefined : ''}
-          style={{ width: 'auto' }}
+      <div className="todo-chips" style={{ alignItems: 'flex-start' }}>
+        <span className="todo-label">Notes</span>
+        <textarea
+          key={`description:${todo.description}`}
+          defaultValue={todo.description}
+          placeholder="Add notes"
+          aria-label="Notes"
+          rows={2}
+          style={{ flex: 1, minWidth: 0 }}
+          onBlur={e => e.currentTarget.value !== todo.description && update('description', e.currentTarget.value)}
         />
-        {todo.due && (
-          <button className="ghost" onClick={() => update('due', '')}>
-            Clear
-          </button>
-        )}
       </div>
-      <TagEditor own={own} tags={tags} onChange={setTags} />
       <div className="todo-chips" style={{ alignItems: 'flex-start' }}>
         <span className="todo-label">Links</span>
         <div className="todo-links">
@@ -645,7 +705,8 @@ function Details({
             <div className="todo-chips">
               {links.map(l => (
                 <span key={l.ref} className="badge" data-tone={linkTone(l)}>
-                  <LinkAnchor link={l} onError={onError} style={LINK}>
+                  {l.kind === 'project' && <Icon name="briefcase" />}
+                  <LinkAnchor link={l} onError={onError} onOpen={onOpen} style={LINK}>
                     {l.kind === 'session' && '💬 '}
                     {clip(l.title)}
                   </LinkAnchor>
@@ -671,54 +732,23 @@ function Details({
           </div>
         </div>
       </div>
-      <div className="todo-chips" style={{ alignItems: 'flex-start' }}>
-        <span className="todo-label">Notes</span>
-        <textarea
-          key={`description:${todo.description}`}
-          defaultValue={todo.description}
-          placeholder="Add notes"
-          aria-label="Notes"
-          rows={2}
-          style={{ flex: 1, minWidth: 0 }}
-          onBlur={e => e.currentTarget.value !== todo.description && update('description', e.currentTarget.value)}
+      <div className="todo-chips">
+        <span className="todo-label">Due</span>
+        <input
+          key={`due:${todo.due}`}
+          type="date"
+          defaultValue={todo.due ?? ''}
+          onBlur={e => e.currentTarget.value !== (todo.due ?? '') && update('due', e.currentTarget.value)}
+          aria-label="Due date"
+          data-empty={todo.due ? undefined : ''}
+          style={{ width: 'auto' }}
         />
-      </div>
-    </div>
-  )
-}
-
-/** The item's tags, then a search over the tag set; a typed tag not in the set joins it. */
-function TagEditor({ own, tags, onChange }: { own: string[]; tags: string[]; onChange: (tags: string[]) => void }) {
-  const [text, setText] = useState('')
-  const needle = text.trim().toLowerCase()
-  const matches = tags.filter(t => !own.includes(t) && t.toLowerCase().includes(needle))
-  const exists = tags.some(t => t.toLowerCase() === needle)
-  const options: Option[] = [
-    ...matches.map(t => ({ key: t, badge: t, tone: tagTone(t) })),
-    ...(needle && !exists ? [{ key: NEW, badge: 'New tag', label: text.trim() }] : []),
-  ]
-
-  return (
-    <div className="todo-chips">
-      <span className="todo-label">Tags</span>
-      {own.map(tag => (
-        <span key={tag} className="badge" data-tone={tagTone(tag)}>
-          {tag}
-          <button title="Remove tag" onClick={() => onChange(own.filter(t => t !== tag))}>
-            ×
+        {todo.due && (
+          <button className="ghost" onClick={() => update('due', '')}>
+            Clear
           </button>
-        </span>
-      ))}
-      <Combobox
-        text={text}
-        onText={setText}
-        placeholder="Add tag"
-        options={options}
-        onPick={option => {
-          onChange([...own, option.key === NEW ? text.trim() : option.key])
-          setText('')
-        }}
-      />
+        )}
+      </div>
     </div>
   )
 }

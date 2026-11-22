@@ -1,0 +1,1 @@
+{ "id": "github-scan", "when": { "schedule": "*/5 * * * *" }, "run": "github.scan", "log": false }

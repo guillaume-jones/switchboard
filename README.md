@@ -25,8 +25,21 @@ Requires git.
 
 On first start the app creates `~/.switchboard` from the default [`template/`](template) as a git repo. This is the repo your agents can freely edit to add data or UI. 
 
-The default template include session support, terminals and projects. It uses the Claude harness, but this can be swapped out freely. To track every agent session, not just those launched from Switchboard, merge the `hooks` from `~/.switchboard/sources/sessions/files/claude-hooks.json` into your agent config.
+The default template includes chats with file previews, terminals, projects, to-dos, your GitHub PRs and Claude usage. It uses the Claude harness, but this can be swapped out freely. To track every agent session, not just those launched from Switchboard, merge the `hooks` from `~/.switchboard/sources/sessions/files/claude-hooks.json` into your agent config.
 
+
+It needs:
+
+- [Claude Code](https://claude.com/claude-code), `python3` and `tmux`.
+- The [GitHub CLI](https://cli.github.com), logged in with `gh auth login`, for the PR list.
+- A Mac with Apple silicon for dictation, which offers to install itself (540 MB) the first time you use it.
+
+An example rule, off by default, has an agent fix and push to your PRs with failing CI or merge conflicts. To turn it on:
+
+```sh
+cd ~/.switchboard
+cp sources/github/files/fix_failing.json sources/github/rules/
+```
 
 To start from another template instead, quit the app and run `swb init <git url>` to keep pulling its updates, or `swb init <git url> --copy` for a repo of your own; `swb init` alone restores the built-in one.
 
@@ -47,7 +60,7 @@ The app can serve a mobile web app over Tailscale, with notifications & offline 
 
 Requires Rust & Node 24.
 
-Linux also requires [Tauri's system dependencies](https://v2.tauri.app/start/prerequisites/#linux), plus `tmux`, `zsh`, `dash` and `jq` for the template.
+Linux also requires [Tauri's system dependencies](https://v2.tauri.app/start/prerequisites/#linux), plus `tmux`, `zsh`, `dash`, `jq` and `python3` for the template.
 
 ```sh
 make install

@@ -1,0 +1,7 @@
+{
+  "id": "term-release",
+  "when": { "view": "term_archived" },
+  "key": "{name}@{hidden_at}",
+  "run": "term.release",
+  "args": { "name": "{name}" }
+}

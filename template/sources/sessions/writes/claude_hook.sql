@@ -78,7 +78,7 @@ WHERE id = :payload ->> '$.session_id' AND created_at = updated_at
   AND (origin IS 'automation' OR (run_id IS NULL AND coalesce(host, '') NOT IN ('switchboard', 'dev.switchboard.app')));
 
 UPDATE sessions.watches SET armed_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
-WHERE session = :payload ->> '$.session_id' AND sticky AND :payload ->> '$.hook_event_name' = 'UserPromptSubmit';
+WHERE session = :payload ->> '$.session_id' AND :payload ->> '$.hook_event_name' = 'UserPromptSubmit';
 
 INSERT OR IGNORE INTO sessions.watches (session, armed_at)
 SELECT id, created_at FROM sessions.items

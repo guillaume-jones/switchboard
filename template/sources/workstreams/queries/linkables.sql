@@ -3,6 +3,10 @@ SELECT ref, kind, label, title, status, updated FROM (
   FROM sessions_items
   WHERE NOT hidden
   UNION ALL
+  SELECT url, 'pr', title, title, status, datetime(created_at / 1000, 'unixepoch', 'localtime')
+  FROM github_prs
+  WHERE is_open
+  UNION ALL
   SELECT 'workstreams:' || id, 'project', title, title, NULL, datetime(updated_at / 1000, 'unixepoch', 'localtime')
   FROM workstreams.items
   WHERE list = 'projects' AND done_at IS NULL

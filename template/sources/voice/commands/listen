@@ -1,0 +1,40 @@
+#!/bin/zsh
+# voice.listen: local dictation for cards/lib/dictate.tsx; see files/listen.py. Prints `install` if voice.install has to
+# run first. Reads extra words to expect, one per line, from data/voice/vocabulary.txt. The model and its native library
+# are third-party, so they get no network, no writes, no child processes and nothing in the home folder but their own
+# files.
+stty raw -echo
+source $SOURCE_DIR/files/release.sh
+
+# Output still unread when the terminal closes is lost, so wait for the card to have read it.
+report() {
+  print -r -- "$1"$'\r'
+  read -r _
+  exit 0
+}
+
+[[ $OSTYPE == darwin* && $(uname -m) == arm64 ]] || report '{"error": "Dictation needs a Mac with Apple silicon"}'
+voice=$SWITCHBOARD_HOME/data/voice
+[[ -d $voice/$lib && -f $voice/$model ]] || report '{"install": true}'
+python=$(/usr/bin/xcrun -f python3 2>/dev/null) ||
+  report '{"error": "Dictation needs the Command Line Tools: run xcode-select --install, then try again"}'
+python=${python:A}
+voice=${voice:A}
+vocabulary=$voice/vocabulary.txt
+[[ -f $vocabulary ]] || : > $vocabulary
+cache=$(getconf DARWIN_USER_CACHE_DIR)
+
+sandbox='(version 1)
+(allow default)
+(deny network*)
+(deny process-fork)
+(deny appleevent-send)
+(deny file-write*)
+(allow file-write* (subpath "/dev") (subpath (param "CACHE")))
+(deny file-read-data (subpath (param "HOME")))
+(allow file-read-data (subpath (param "VOICE")) (subpath (param "SOURCE")) (subpath (param "PYTHON")))'
+
+cd $voice
+exec /usr/bin/sandbox-exec -D HOME=${HOME:A} -D VOICE=$voice -D SOURCE=${SOURCE_DIR:A} -D PYTHON=${python:h:h} \
+  -D CACHE=${cache:A} -p $sandbox \
+  $python -I ${SOURCE_DIR:A}/files/listen.py $voice/$lib $voice/$model $vocabulary

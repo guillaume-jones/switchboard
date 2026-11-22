@@ -15,7 +15,7 @@ import { useFindKey } from './lib/theme'
 
 type Board = { id: string; title: string; component: string; props: string; current: number }
 type ProjectItem = { id: number; title: string; done: number; folder: string | null; created_at: number }
-type Terminal = { name: string; cwd: string | null; chat: string | null; chat_title: string | null }
+type Terminal = { name: string; cwd: string | null; chat: string | null }
 
 /** Shown until the first board is added with `ui.add_board`. */
 const IMPLICIT_MAIN: Board = { id: 'main', title: 'Main', component: 'Grid', props: '{"grid":"main"}', current: 1 }
@@ -130,7 +130,9 @@ export default function Boards({ client }: CardProps<{ client: string }>) {
       {sidebar}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
         {mobile && (
-          <div className={chat || current?.component === 'Project' ? 'mobile-bar floating' : 'mobile-bar'}>
+          <div
+            className={chat !== undefined || current?.component === 'Project' ? 'mobile-bar floating' : 'mobile-bar'}
+          >
             <button
               className="ghost icon"
               title="Menu"
@@ -143,8 +145,8 @@ export default function Boards({ client }: CardProps<{ client: string }>) {
                 <span className="dot" style={{ position: 'absolute', top: 6, right: 6, background: 'var(--notify)' }} />
               )}
             </button>
-            {!chat && current?.component !== 'Project' && (
-              <span className="heading">{chat === undefined ? current?.title : 'New chat'}</span>
+            {chat === undefined && current?.component !== 'Project' && (
+              <span className="heading">{current?.title}</span>
             )}
           </div>
         )}
@@ -152,7 +154,8 @@ export default function Boards({ client }: CardProps<{ client: string }>) {
           style={{
             flex: 1,
             minHeight: 0,
-            overflow: 'auto',
+            overflowY: 'auto',
+            overflowX: 'hidden',
             overscrollBehavior: 'contain',
             display: 'flex',
             flexDirection: 'column',
@@ -211,7 +214,7 @@ function Sidebar({ boards, current, chat, client, onPick, panel, style }: Sideba
   const openChat = (session: string) => pick('ui.open_chat', { client, session })
   const archive = useArchive(client)
   const terminals = useQuery<Terminal>('term_items')
-  const shownTerminals = (terminals ?? []).filter(t => matches(t.name, t.chat_title, t.cwd))
+  const shownTerminals = (terminals ?? []).filter(t => !t.chat && matches(t.name, t.cwd))
   const openTerminal = (name: string, cwd: string, chat: string) => {
     run('term.open', { name, cwd, chat }).catch(console.error)
     pick('ui.open_terminal', { client, name })
@@ -422,12 +425,12 @@ function Sidebar({ boards, current, chat, client, onPick, panel, style }: Sideba
             <NavItem
               key={t.name}
               current={current === `term:${t.name}`}
-              onClick={() => openTerminal(t.name, t.cwd ?? '', t.chat ?? '')}
-              title={`${t.chat_title ?? t.name}\n${t.cwd ?? ''}`}
+              onClick={() => openTerminal(t.name, t.cwd ?? '', '')}
+              title={`${t.name}\n${t.cwd ?? ''}`}
               action={
                 <button
                   title="Close"
-                  aria-label={`Close terminal ${t.chat_title ?? t.name}`}
+                  aria-label={`Close terminal ${t.name}`}
                   className="ghost icon small hover-action"
                   onClick={() => {
                     const away = current === `term:${t.name}` ? mutate('ui.next_board', { client }) : Promise.resolve()
@@ -442,7 +445,7 @@ function Sidebar({ boards, current, chat, client, onPick, panel, style }: Sideba
                 <TerminalIcon size={12} />
               </span>
               <span className="label">
-                {t.chat_title ?? t.name}
+                {t.name}
                 <span className="sub">{t.cwd?.split('/').pop() || '~'}</span>
               </span>
             </NavItem>

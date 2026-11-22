@@ -5,6 +5,7 @@ type AttentionItem = { id: number; ref: string; reason: string | null; level: nu
 type Rule = { rule: string; disabled_reason: string | null }
 type Run = { id: string; command: string; started_at: string | null }
 type CoreEvent = { id: number; time: string; name: string; message: string }
+type WeeklyUsage = { percent: number; resets: string }
 
 const URGENT_LEVEL = 2
 const attentionColor = (level: number) => (level >= URGENT_LEVEL ? 'var(--accent)' : 'var(--info)')
@@ -23,7 +24,9 @@ export default function Health() {
   const recentErrors = useQuery<CoreEvent>('core.events', { kind: 'error', limit: RECENT_ERRORS }) ?? []
   const clearedThrough = useQuery<{ through: number }>('attention_errors_cleared')?.[0]?.through ?? 0
   const errors = recentErrors.filter(event => event.id > clearedThrough)
+  const usage = useQuery<WeeklyUsage>('claude_weekly')?.[0]
   const [open, setOpen] = useState(false)
+  const [usageTipOpen, setUsageTipOpen] = useState(false)
   const connection = useConnection()
   const online = connection.state === 'online'
   const connectionLabel =
@@ -118,6 +121,25 @@ export default function Health() {
 
   return (
     <>
+      {usage && (
+        <div
+          className="usage"
+          tabIndex={0}
+          data-open={usageTipOpen || undefined}
+          onClick={() => setUsageTipOpen(isOpen => !isOpen)}
+          onBlur={() => setUsageTipOpen(false)}
+        >
+          <span className="usage-tip">
+            Claude weekly usage: {usage.percent}%
+            <br />
+            Resets {usage.resets.replace(/ \(.*\)$/, '').replace(/(\d)([ap]m)$/, '$1 $2')}
+          </span>
+          <span>Usage</span>
+          <div className="usage-bar">
+            <div style={{ width: `${Math.min(usage.percent, 100)}%` }} />
+          </div>
+        </div>
+      )}
       <button onClick={() => setOpen(isOpen => !isOpen)} title={summary} className="ghost health">
         <span style={{ flex: 1, textAlign: 'left' }}>{online ? 'Health' : connectionLabel}</span>
         {healthy && <span className="dot" style={{ '--tone': 'var(--good)' } as CSSProperties} />}

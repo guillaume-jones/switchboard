@@ -1,0 +1,5 @@
+CREATE TABLE usage (
+  id INTEGER PRIMARY KEY NOT NULL,
+  raw TEXT NOT NULL,
+  fetched_at INTEGER NOT NULL
+);

@@ -1,0 +1,14 @@
+#!/bin/zsh
+# docs.read {path}: stages a Markdown, HTML or .txt file's text under its path as given, or why it can't be read.
+zmodload zsh/stat
+path_=${SWB_ARG_PATH/#\~/$HOME}
+path_=${path_:A}
+if [[ ${path_:e:l} != (md|markdown|html|htm|txt) ]]; then error="not a Markdown, HTML or .txt file"
+elif [[ ! -f $path_ ]]; then error="no such file"
+elif (( $(zstat +size $path_) > 16000000 )); then error="too large to preview"
+fi
+if [[ -n $error ]]; then
+  jq -nc --arg path $SWB_ARG_PATH --arg error $error '{path: $path, error: $error}'
+else
+  jq -Rsc --arg path $SWB_ARG_PATH '{path: $path, text: .}' < $path_
+fi | "$SWB" write docs.put >/dev/null

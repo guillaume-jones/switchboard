@@ -3,8 +3,8 @@ SELECT uuid, session, at, role, tokens, model, tool_id, tool_name, is_error,
   CASE
     WHEN role = 'user' AND instr(text, 'Sent by the user from Switchboard:' || char(10) || char(10)) > 0 THEN
       substr(text, instr(text, 'Sent by the user from Switchboard:') + 36)
-    WHEN text LIKE '<command-name>%' THEN trim(
-      substr(text, 15, instr(text, '</command-name>') - 15) || ' ' ||
+    WHEN text LIKE '<command-%' AND instr(text, '<command-name>') > 0 THEN trim(
+      substr(text, instr(text, '<command-name>') + 14, instr(text, '</command-name>') - instr(text, '<command-name>') - 14) || ' ' ||
       iif(instr(text, '<command-args>') > 0,
         substr(text, instr(text, '<command-args>') + 14, instr(text, '</command-args>') - instr(text, '<command-args>') - 14), ''))
     WHEN role = 'notification' AND instr(text, '<summary>') > 0 THEN
@@ -19,7 +19,7 @@ FROM (
       WHEN m.value ->> '$.isCompactSummary' THEN 'compact'
       WHEN m.value ->> '$.sourceToolUseID' IS NOT NULL THEN 'skill'
       WHEN m.value ->> '$.type' = 'system' OR m.content ->> '$' LIKE '<local-command-std%' THEN 'command'
-      WHEN m.origin ->> '$.kind' = 'task-notification' THEN 'notification'
+      WHEN m.origin ->> '$.kind' = 'task-notification' OR m.value ->> '$.attachment.commandMode' = 'task-notification' THEN 'notification'
       WHEN m.origin ->> '$.from' = 'switchboard' THEN 'user'
       WHEN m.origin ->> '$.kind' = 'peer' THEN iif(m.origin ->> '$.handback', 'subagent', 'peer')
       WHEN m.value ->> '$.type' = 'attachment' THEN 'user'
@@ -44,7 +44,7 @@ FROM (
         SELECT group_concat(CASE c.value ->> '$.type'
           WHEN 'text' THEN iif(c.value ->> '$.text' LIKE '<system-reminder>%', NULL, c.value ->> '$.text')
           WHEN 'tool_use' THEN '→ ' || (c.value ->> '$.name') || ' ' || substr(c.value ->> '$.input', 1,
-            iif(c.value ->> '$.name' IN ('Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'), 200000, 500))
+            iif(c.value ->> '$.name' IN ('Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'), 200000, 600))
           WHEN 'thinking' THEN coalesce(m.value ->> '$.message.usage.output_tokens_details.thinking_tokens', '0')
           WHEN 'image' THEN '[image]'
           WHEN 'tool_result' THEN '← ' || substr(
@@ -54,7 +54,7 @@ FROM (
                 FROM json_each(c.value, '$.content') AS t
               )
               ELSE coalesce(c.value ->> '$.content', '')
-            END, 1, 500)
+            END, 1, 600)
         END, char(10) || char(10))
         FROM json_each(m.content) AS c
       )

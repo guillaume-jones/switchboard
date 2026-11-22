@@ -1,0 +1,4 @@
+#!/bin/zsh
+# sessions.prune-attachments: deletes files saved to data/attachments more than 30 days ago.
+find $SWITCHBOARD_HOME/data/attachments -mindepth 1 -maxdepth 1 -mtime +30 -exec rm -rf {} +
+exit 0

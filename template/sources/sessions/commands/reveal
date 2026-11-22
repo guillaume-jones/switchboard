@@ -1,5 +1,7 @@
 #!/bin/zsh
-# sessions.reveal {path}: opens an attached file (under data/attachments) in its default app.
-path_=${SWB_ARG_PATH:A}
-[[ $path_ == $SWITCHBOARD_HOME/data/attachments/* && -f $path_ ]] || { print -u2 "not an attachment: $SWB_ARG_PATH"; exit 1 }
-open $path_
+# sessions.reveal {path}: opens a local file or folder in its default app. Refuses apps and executables, since paths come from agent text.
+path_=${SWB_ARG_PATH/#\~/$HOME}
+path_=${path_:A}
+[[ -e $path_ ]] || { print -u2 "no such path: $SWB_ARG_PATH"; exit 1 }
+[[ ${path_:l} == *.(app|command|tool|terminal|workflow|pkg|mpkg|dmg|jar|inetloc|fileloc|webloc|desktop)(|/*) || ( -f $path_ && -x $path_ ) ]] && { print -u2 "refusing to open an app or executable: $path_"; exit 1 }
+if [[ $OSTYPE == darwin* ]]; then open $path_; else xdg-open $path_; fi

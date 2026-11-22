@@ -30,6 +30,8 @@ const THEME = {
   brightWhite: '#f7f7f7',
 }
 
+/** Replies xterm.js gives to device-attribute and mode queries (DA1, DA2, DECRQM), which a reattached run replays. */
+const REPORTS = /^(\x1b\[[?>][\d;]*(c|\$y))+$/
 const arrow = (key: string) => (term: XTerm) => (term.modes.applicationCursorKeysMode ? '\x1bO' : '\x1b[') + key
 /** Keys a phone keyboard lacks. */
 const KEYS: [string, string | ((term: XTerm) => string)][] = [
@@ -60,7 +62,8 @@ export default function Terminal({ name, slot }: CardProps<{ name: string }>) {
 
   useEffect(() => {
     const viewport = window.visualViewport
-    if (!viewport || !box.current) return
+    setHeight(undefined)
+    if (!viewport || !box.current || !mobile) return
     const fit = () => setHeight(viewport.offsetTop + viewport.height - (box.current?.getBoundingClientRect().top ?? 0))
     fit()
     viewport.addEventListener('resize', fit)
@@ -69,7 +72,7 @@ export default function Terminal({ name, slot }: CardProps<{ name: string }>) {
       viewport.removeEventListener('resize', fit)
       viewport.removeEventListener('scroll', fit)
     }
-  }, [running])
+  }, [running, mobile])
 
   useEffect(() => {
     const element = screen.current
@@ -94,7 +97,8 @@ export default function Terminal({ name, slot }: CardProps<{ name: string }>) {
     let failures = 0
     let retry = 0
     let disposed = false
-    const send = (data: string) => connection?.write(data)
+    let replaying = false
+    const send = (data: string) => (replaying && REPORTS.test(data)) || connection?.write(data)
     const reconnect = (delay: number) => {
       if (!disposed && !document.hidden) retry = window.setTimeout(connect, delay)
     }
@@ -103,6 +107,7 @@ export default function Terminal({ name, slot }: CardProps<{ name: string }>) {
       connecting = true
       try {
         const stored = localStorage.getItem(key)
+        replaying = !!stored
         const id = stored ?? (await run('term.attach', { name }))
         localStorage.setItem(key, id)
         if (disposed) return
@@ -243,6 +248,7 @@ export default function Terminal({ name, slot }: CardProps<{ name: string }>) {
         flexDirection: 'column',
         flex: height === undefined ? 1 : 'none',
         height,
+        minHeight: 0,
       }}
     >
       <style>{XTERM_CSS}</style>

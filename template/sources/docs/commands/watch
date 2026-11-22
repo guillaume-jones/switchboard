@@ -1,0 +1,16 @@
+#!/bin/zsh
+# docs.watch {path}: stages the Markdown, HTML or .txt file `path` (docs.read) now and whenever it changes, checking every 3 s with
+# zsh builtins. A `pty` run, so it lives while a card is attached to it and is hung up 30 s after the last one leaves.
+zmodload zsh/stat zsh/zselect
+path_=${SWB_ARG_PATH/#\~/$HOME}
+path_=${path_:A}
+last=-
+while true; do
+  stamp=
+  zstat -H info $path_ 2>/dev/null && stamp="$info[mtime] $info[size]"
+  if [[ $stamp != $last ]]; then
+    last=$stamp
+    $SOURCE_DIR/commands/read
+  fi
+  zselect -t 300
+done

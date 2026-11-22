@@ -124,11 +124,11 @@ CREATE TABLE seen (
   seen_at INTEGER NOT NULL
 );
 
--- Sessions the user asked to be notified about once their current turn ends, or after every turn when sticky.
+-- Sessions the user asked to be notified about after every turn.
 CREATE TABLE watches (
   session TEXT PRIMARY KEY NOT NULL,
   armed_at INTEGER NOT NULL,
-  sticky INTEGER NOT NULL DEFAULT 0
+  sticky INTEGER NOT NULL DEFAULT 0 -- @deprecated every watch notifies after every turn
 );
 
 -- The model picked for a session, which it resumes on from its next message or open on.

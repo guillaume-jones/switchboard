@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react'
-import { mutate, run, useExpose, useQuery, type CardProps } from 'switchboard'
+import { CardSlot, mutate, run, useExpose, useQuery, type CardProps } from 'switchboard'
 import {
   BUBBLE,
   Bubble,
@@ -33,8 +33,12 @@ import {
 } from './lib/sessions'
 import { useFindKey, useMobile } from './lib/theme'
 import { ArchiveIcon, BellIcon, Icon, TerminalIcon } from './lib/icons'
-import { copyCode, renderMarkdown } from './lib/markdown'
+import { copyCode, HTML, IMAGE, renderMarkdown, TXT } from './lib/markdown'
 import { Actions } from './lib/actions'
+import { Preview } from './lib/preview'
+import { Doc } from './lib/doc'
+import { ImageView, isUnsent } from './lib/image'
+import { useQuoteShortcut } from './lib/quote'
 
 type Message = {
   uuid: string
@@ -305,14 +309,15 @@ const toolSummary = (group: Message[]) => {
  * runs (a link that opens it there with `sessions.open`, desktop only), then its pending decision and a message box
  * pinned to the bottom. Without a session, a new chat.
  */
-export default function Transcript({ session }: CardProps<{ session?: string | null }>) {
+export default function Transcript({ session, slot }: CardProps<{ session?: string | null }>) {
   if (!session) return <NewChat />
-  return <SessionTranscript key={session} id={session} />
+  return <SessionTranscript key={session} id={session} slot={slot} />
 }
 
 type Run = { state: string; summary: string | null }
 
 type ChatLink = { ref: string; kind: string; label: string | null }
+const LINK_TONES: Record<string, string> = { pr: 'info' }
 
 const tilde = (path: string) => path.replace(/^\/(Users|home)\/[^/]+/, '~')
 const short = (path: string) => tilde(path).replace(/^~\/Documents\//, '')
@@ -324,7 +329,8 @@ const short = (path: string) => tilde(path).replace(/^~\/Documents\//, '')
 function NewChat() {
   const client = useMobile() ? 'mobile' : 'desktop'
   const [prompt, setPrompt] = useDraft('NewChat.prompt')
-  const [, setFiles] = useDraft('NewChat.files')
+  const [files, setFiles] = useDraft('NewChat.files')
+  const [stash, setStash] = useDraft('NewChat.stash')
   const [todo, setTodo] = useDraft('NewChat.todo')
   const [pinned, setPinned] = useDraft('NewChat.cwd')
   const [model, setModel] = useDraft('NewChat.model')
@@ -367,10 +373,19 @@ function NewChat() {
 
   const dirty = !!(prompt || links.length || todo)
   const clear = () => {
+    setStash(JSON.stringify({ prompt, files, links: linksDraft, todo }))
     setPrompt('')
     setFiles('')
     setLinks('')
     setTodo('')
+  }
+  const restore = () => {
+    const saved = JSON.parse(stash)
+    setPrompt(saved.prompt)
+    setFiles(saved.files)
+    setLinks(saved.links)
+    setTodo(saved.todo)
+    setStash('')
   }
 
   const start = (prompt: string, files: Attachment[]) => {
@@ -398,6 +413,35 @@ function NewChat() {
         background: 'var(--panel)',
       }}
     >
+      <div className="board-header">
+        <span style={{ flex: 1, fontWeight: 600 }}>New chat</span>
+        {dirty ? (
+          <button
+            type="button"
+            className="ghost icon"
+            title="Clear the message, files and links (Esc)"
+            aria-label="Clear"
+            onMouseDown={e => e.preventDefault()}
+            onClick={clear}
+          >
+            ✕
+          </button>
+        ) : (
+          stash && (
+            <button
+              type="button"
+              className="ghost icon"
+              title="Restore the cleared message, files and links"
+              aria-label="Restore"
+              onMouseDown={e => e.preventDefault()}
+              onClick={restore}
+            >
+              <Icon name="undo" />
+            </button>
+          )
+        )}
+      </div>
+      <div style={{ flex: 1 }} />
       {error && <div style={{ ...BUBBLE, color: 'var(--bad)' }}>{error}</div>}
       {queued && <div className="empty">Queued: the chat appears in the sidebar once it starts</div>}
       <div className="composer-footer">
@@ -405,14 +449,14 @@ function NewChat() {
           <div className="todo-chips" style={{ marginBottom: 6 }}>
             {linked && (
               <span className="badge" data-tone="accent" title="Sending links this chat to the to-do">
-                To-do: {linked.title}
+                To-do: {clip(linked.title, 32)}
                 <button title="Don't link to the to-do" onClick={() => setTodo('')}>
                   ×
                 </button>
               </span>
             )}
             {links.map(l => (
-              <span key={l.ref} className="badge" title={l.ref}>
+              <span key={l.ref} className="badge" data-tone={LINK_TONES[l.kind]} title={l.ref}>
                 {l.label ?? l.kind}
                 <button
                   title="Leave out of the message"
@@ -425,32 +469,24 @@ function NewChat() {
           </div>
         )}
         <div className="chat-options">
-          <FolderPicker value={cwd} onChange={next => setPinned(next || ' ')} />
           <ModelSelect value={model || 'opus'} onChange={setModel} />
-          <button
-            type="button"
-            className="ghost icon round"
-            title="Clear the message, files and links (Esc)"
-            aria-label="Clear"
-            style={{ visibility: dirty ? undefined : 'hidden' }}
-            onClick={clear}
-          >
-            ✕
-          </button>
+          <FolderPicker value={cwd} onChange={next => setPinned(next || ' ')} />
         </div>
-        <MessageBox
-          draft="NewChat.prompt"
-          files="NewChat.files"
-          placeholder={cwd.trim() ? 'Ask Claude' : 'Ask Claude to change this app'}
-          onSend={start}
-          onError={setError}
-          button={runId && !queued ? <Spinner /> : undefined}
-          onKeyDown={e => {
-            if (e.key !== 'Escape' || !dirty) return
-            e.preventDefault()
-            clear()
-          }}
-        />
+        <div className="composer-row">
+          <MessageBox
+            draft="NewChat.prompt"
+            files="NewChat.files"
+            placeholder={cwd.trim() ? 'Ask Claude' : 'Ask Claude to change this app'}
+            onSend={start}
+            onError={setError}
+            button={runId && !queued ? <Spinner /> : undefined}
+            onKeyDown={e => {
+              if (e.key !== 'Escape' || !dirty) return
+              e.preventDefault()
+              clear()
+            }}
+          />
+        </div>
       </div>
     </div>
   )
@@ -529,11 +565,22 @@ function FolderPicker({ value, onChange }: { value: string; onChange: (cwd: stri
 
 const CLOCK_SKEW = 5000
 const PAGE = 500
-const PREFETCH_SCREENS = 1.5
+const FIRST_PAGE = 100
+const PREFETCH_SCREENS = 2
 const AWAY_FROM_END = 300
 const FOLLOW_WITHIN = 48
+const MIN_SEARCH = 2
+const SEARCH_DEBOUNCE = 120
+const DRAW_BATCH = 20
+const DRAW_PAUSE = 150
 
-function SessionTranscript({ id }: { id: string }) {
+/**
+ * Preview tabs: `terminal` or `doc:<path>` (a Markdown, HTML, .txt or image file, or an unsent image), and those closed, latest
+ * last. On phones, `shown` false shows the chat.
+ */
+type PreviewState = { tabs: string[]; active?: string; shown: boolean; closed?: string[] }
+
+function SessionTranscript({ id, slot }: { id: string; slot?: string }) {
   const row = useQuery<Session>('sessions_items', { id })?.[0]
   const loading = !row
   const session: Session = row ?? {
@@ -555,25 +602,58 @@ function SessionTranscript({ id }: { id: string }) {
     useQuery<{ item: number; item_title: string; item_done: number; item_list: string }>('workstreams_links', {
       ref: `sessions:${id}`,
     }) ?? []
-  const [limit, setLimit] = useState(PAGE)
+  const [limit, setLimit] = useState(FIRST_PAGE)
   const [away, setAway] = useState(false)
   const rows = useQuery<Message>('sessions.transcript', { session: id, limit })
   const loaded = useRef<Message[]>([])
   if (rows) loaded.current = rows
   const messages = loaded.current
-  const subagents = (useQuery<Subagent>('sessions_subagents', { session: id, done: 0 }) ?? []).filter(
+  const agents = useQuery<Subagent>('sessions_subagents', { session: id, done: 0 })
+  // what is already under way when the chat opens shows at once; only later changes animate
+  const opened = useRef<{ agents: Set<string> }>(undefined)
+  if (row && rows && agents) opened.current ??= { agents: new Set(agents.map(a => String(a.id))) }
+  const subagents = (agents ?? []).filter(
     a => (a.background || busy(session)) && Date.now() - Date.parse(a.updated_at ?? '') < STALE_SUBAGENT,
   )
   const [error, setError] = useState('')
   const [searching, setSearching] = useState(false)
-  const watching = !!useQuery<{ done: number; sticky: number }>('sessions_watches', { session: id })?.some(
-    w => w.sticky || !w.done,
+  const previewKey = `Transcript.preview:${id}`
+  const [preview, setPreviewState] = useState<PreviewState>(
+    () => JSON.parse(localStorage.getItem(previewKey) ?? 'null') ?? { tabs: [], shown: false },
   )
+  const setPreview = (change: (current: PreviewState) => PreviewState) =>
+    setPreviewState(current => {
+      const next = change(current)
+      localStorage.setItem(previewKey, JSON.stringify(next))
+      return next
+    })
+  const openTab = (tab: string) =>
+    setPreview(({ tabs, closed = [] }) => ({
+      tabs: tabs.includes(tab) ? tabs : [...tabs, tab],
+      active: tab,
+      shown: true,
+      closed: closed.filter(t => t !== tab),
+    }))
+  const closeTab = (tab: string) =>
+    setPreview(({ tabs, active, shown, closed = [] }) => {
+      const left = tabs.filter(t => t !== tab)
+      return {
+        tabs: left,
+        active: active === tab ? left.at(-1) : active,
+        shown: shown && left.length > 0,
+        closed: [...closed.filter(t => t !== tab), tab].slice(-20),
+      }
+    })
+  const previewOpen = preview.shown && preview.tabs.length > 0
+  const showPreview = (shown: boolean) => setPreview(current => ({ ...current, shown }))
+  const watching = !!useQuery('sessions_watches', { session: id })?.length
   const mobile = useMobile()
   const scroller = useRef<HTMLDivElement>(null)
   const card = useRef<HTMLDivElement>(null)
+  useQuoteShortcut(card)
   useFindKey(card, () => {
     setSearching(true)
+    setLimit(current => Math.max(current, PAGE))
     requestAnimationFrame(() => card.current?.querySelector<HTMLInputElement>('.transcript-search input')?.select())
   })
   const working = busy(session)
@@ -581,15 +661,52 @@ function SessionTranscript({ id }: { id: string }) {
   const scrollToEnd = () => requestAnimationFrame(() => scroller.current?.scrollTo({ top: 0, behavior: 'smooth' }))
   const hasMessages = messages.length > 0
   useEffect(() => {
-    const list = scroller.current?.firstElementChild
-    if (!list) return
+    const el = scroller.current
+    const list = el?.firstElementChild
+    if (!el || !list) return
+    let anchor: { node: Element; top: number } | undefined
+    let adjusted: number | undefined
+    const pin = () => {
+      if (el.scrollTop === adjusted) return
+      adjusted = undefined
+      const bottom = el.getBoundingClientRect().bottom
+      anchor = undefined
+      for (let node = list.lastElementChild; node; node = node.previousElementSibling) {
+        const top = node.getBoundingClientRect().top
+        if (top < bottom) return void (anchor = { node, top })
+      }
+    }
     const follow = new ResizeObserver(() => {
-      const el = scroller.current
-      if (el && el.scrollTop < 0 && el.scrollTop > -FOLLOW_WITHIN) el.scrollTop = 0
+      if (el.scrollTop <= -FOLLOW_WITHIN && anchor?.node.isConnected) {
+        el.scrollTop += anchor.node.getBoundingClientRect().top - anchor.top
+        adjusted = el.scrollTop
+        return
+      }
+      if (el.scrollTop > -FOLLOW_WITHIN && el.scrollTop < 0) el.scrollTop = 0
+      adjusted = undefined
+      pin()
     })
+    el.addEventListener('scroll', pin, { passive: true })
     follow.observe(list)
-    return () => follow.disconnect()
+    return () => {
+      el.removeEventListener('scroll', pin)
+      follow.disconnect()
+    }
   }, [hasMessages])
+  const drawer = useRef<IntersectionObserver>(undefined)
+  useEffect(() => {
+    const draw = new IntersectionObserver(
+      seen =>
+        seen.forEach(e => {
+          if (!e.isIntersecting) return
+          e.target.setAttribute('data-near', '')
+          draw.unobserve(e.target)
+        }),
+      { root: scroller.current, rootMargin: '200% 0px' },
+    )
+    drawer.current = draw
+    return () => draw.disconnect()
+  }, [])
   const entries = useOutbox(id)
   const pending = usePending(id)
   const echoed = ({ text, at }: Pending) =>
@@ -608,7 +725,7 @@ function SessionTranscript({ id }: { id: string }) {
         .filter(p => !echoed(p))
       return kept.length === sends.length && !added.length ? sends : [...kept, ...added]
     })
-  })
+  }, [messages, entries, pending])
 
   useEffect(() => {
     if (!loading) mutate('sessions.seen', { session: id }).catch(console.error)
@@ -651,8 +768,16 @@ function SessionTranscript({ id }: { id: string }) {
     )
     return { denied, kinds, shownGroups }
   }, [messages])
+  const cwdPrefix = session.cwd ? `${tilde(session.cwd)}/` : null
   const shortPaths = (calls: Message[]) =>
-    [...new Set(calls.flatMap(toolPaths).map(p => tilde(p.replace(`${session.cwd}/`, ''))))].join(', ')
+    [
+      ...new Set(
+        calls
+          .flatMap(toolPaths)
+          .map(tilde)
+          .map(p => (cwdPrefix && p.startsWith(cwdPrefix) ? p.slice(cwdPrefix.length) : p)),
+      ),
+    ].join(', ')
   const newest = shownGroups.at(-1)
   const newestKey = newest && (Array.isArray(newest) ? newest[0].uuid : newest.uuid)
   const shownKeys = useRef<Set<string> | undefined>(undefined)
@@ -700,14 +825,206 @@ function SessionTranscript({ id }: { id: string }) {
       })
       .catch(fail)
   const toggleWatching = () => mutate(watching ? 'sessions.unwatch' : 'sessions.watch', { session: id }).catch(fail)
+  const terminalName = `chat-${id.slice(0, 8)}`
   const openTerminal = (command = '') => {
-    const name = `chat-${id.slice(0, 8)}`
-    run('term.open', { name, cwd: session.cwd ?? '', chat: id, command }).catch(fail)
-    mutate('ui.open_terminal', { client, name }).catch(fail)
+    run('term.open', { name: terminalName, cwd: session.cwd ?? '', chat: id, command }).catch(fail)
+    openTab('terminal')
+    if (!mobile)
+      requestAnimationFrame(() => card.current?.querySelector<HTMLElement>('.preview .xterm-helper-textarea')?.focus())
   }
+  const closePreviewTab = (tab: string) => {
+    if (tab === 'terminal') run('term.close', { name: terminalName }).catch(fail)
+    closeTab(tab)
+  }
+  const togglePreview = () => {
+    const reopen = preview.closed?.at(-1)
+    if (previewOpen) showPreview(false)
+    else if (preview.tabs.length) showPreview(true)
+    else if (reopen && reopen !== 'terminal') openTab(reopen)
+    else openTerminal()
+  }
+  useEffect(() => {
+    const element = card.current
+    if (!element) return
+    const onQuote = (e: Event) => {
+      e.preventDefault()
+      setDraft(
+        draftKey(id),
+        current => `${current.trimEnd() ? `${current.trimEnd()}\n\n` : ''}${(e as CustomEvent<string>).detail}\n\n`,
+      )
+      if (mobile) return
+      requestAnimationFrame(() => {
+        const box = element.querySelector<HTMLTextAreaElement>('.composer-footer textarea')
+        box?.focus()
+        box?.setSelectionRange(box.value.length, box.value.length)
+      })
+    }
+    const onOpenDoc = (e: Event) => {
+      e.preventDefault()
+      openTab(`doc:${tilde((e as CustomEvent<string>).detail)}`)
+    }
+    element.addEventListener('quote', onQuote)
+    element.addEventListener('open-doc', onOpenDoc)
+    return () => {
+      element.removeEventListener('quote', onQuote)
+      element.removeEventListener('open-doc', onOpenDoc)
+    }
+  }, [mobile])
+  const actions = useRef({ edit, openTerminal })
+  actions.current = { edit, openTerminal }
+  const items = useMemo(() => {
+    const runCode = (code: string) => actions.current.openTerminal(code)
+    return shownGroups.map(group => {
+      const uuid = Array.isArray(group) ? group[0].uuid : group.uuid
+      const groupKind = Array.isArray(group) && kinds.get(uuid)
+      const calls = Array.isArray(group) ? group.filter(isCall) : []
+      const count = (noun: string) => `${calls.length} ${noun}${calls.length === 1 ? '' : 's'}`
+      return (
+        <div
+          key={uuid}
+          className={
+            grown.current.has(uuid)
+              ? !Array.isArray(group) && group.role === 'assistant'
+                ? 'transcript-item grow slow'
+                : 'transcript-item grow'
+              : 'transcript-item'
+          }
+          onAnimationEnd={e => e.target === e.currentTarget && e.currentTarget.classList.remove('grow', 'slow')}
+        >
+          {Array.isArray(group) && groupKind === 'read' ? (
+            <div style={{ ...BUBBLE, color: 'var(--muted)', fontSize: 12 }}>
+              {denied.has(uuid) && DENIED_MARK}
+              {count('read')} · {shortPaths(calls)}
+            </div>
+          ) : Array.isArray(group) && groupKind === 'write' ? (
+            <details style={BUBBLE}>
+              <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
+                {denied.has(uuid) && DENIED_MARK}
+                {count('write')}
+                {shortPaths(calls) && ` · ${shortPaths(calls)}`}
+              </summary>
+              {group.map(m => {
+                const diff = isCall(m) && writeDiff(m)
+                if (!isCall(m) && !denied.has(m.uuid) && !m.is_error) return null
+                return diff ? (
+                  <div key={m.uuid}>
+                    <div style={TOOL_LINE}>{shortPaths([m])}</div>
+                    <div className="diff">
+                      {diff.map((line, i) => (
+                        <div key={i} data-op={line[0]}>
+                          {line}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div key={m.uuid} style={TOOL_LINE}>
+                    {toolName(m) === 'Bash' ? `$ ${bashCommand(m)}` : m.text}
+                  </div>
+                )
+              })}
+            </details>
+          ) : Array.isArray(group) ? (
+            <details style={BUBBLE}>
+              <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
+                {denied.has(group[0].uuid) && DENIED_MARK}
+                {toolSummary(group)}
+              </summary>
+              {group.map(m => (
+                <div key={m.uuid} style={TOOL_LINE}>
+                  {denied.has(m.uuid) && isCall(m) && DENIED_MARK}
+                  {m.text}
+                </div>
+              ))}
+            </details>
+          ) : group.role === 'subagent' || group.role === 'peer' ? (
+            <details style={BUBBLE}>
+              <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
+                {group.role === 'subagent' ? 'Subagent returned' : 'Message from another agent'}
+              </summary>
+              <div
+                className="message"
+                onClick={e => copyCode(e, group.text)}
+                dangerouslySetInnerHTML={{ __html: renderMarkdown(group.text) }}
+              />
+            </details>
+          ) : group.role === 'notification' ? (
+            <details style={BUBBLE}>
+              <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
+                Background command finished
+              </summary>
+              <div style={TOOL_LINE}>{group.text}</div>
+            </details>
+          ) : group.role === 'thinking' ? (
+            <div style={{ ...BUBBLE, color: 'var(--muted)', fontSize: 12, fontStyle: 'italic' }}>
+              {Number(group.text) ? `Thought for ${group.text} tokens` : 'Thought'}
+            </div>
+          ) : group.role === 'compact' ? (
+            <details style={COMPACT}>
+              <summary style={{ cursor: 'pointer', color: '#a78bfa', fontSize: 12 }}>Context compacted</summary>
+              <div
+                className="message"
+                onClick={e => copyCode(e, group.text)}
+                dangerouslySetInnerHTML={{ __html: renderMarkdown(group.text) }}
+              />
+            </details>
+          ) : group.role === 'command' ? (
+            <details style={BUBBLE}>
+              <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>Command output</summary>
+              <div style={TOOL_LINE}>{group.text}</div>
+            </details>
+          ) : group.role === 'skill' || (group.role === 'user' && SKILL.test(group.text)) ? (
+            <details style={BUBBLE}>
+              <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
+                Skill loaded{SKILL.test(group.text) && ` · ${group.text.match(SKILL)![1]}`}
+              </summary>
+              <div style={TOOL_LINE}>{group.text}</div>
+            </details>
+          ) : (
+            <Bubble
+              role={group.role}
+              label={`${new Date(group.at).toLocaleTimeString()}${group.tokens ? ` · ${Math.round(group.tokens / 1000)}k` : ''}`}
+              text={group.text}
+              onRunCode={mobile ? undefined : runCode}
+              action={
+                group.role === 'user' &&
+                editable &&
+                group.uuid !== firstPrompt && (
+                  <button
+                    type="button"
+                    className="ghost icon small"
+                    title="Edit this message, dropping it and everything after it (Esc in the message box cancels)"
+                    aria-label="Edit"
+                    onClick={() => actions.current.edit(group)}
+                  >
+                    <Icon name="pencil" />
+                  </button>
+                )
+              }
+            />
+          )}
+        </div>
+      )
+    })
+  }, [shownGroups, denied, kinds, session.cwd, editable, firstPrompt, mobile])
+  const scrolledAt = useRef(0)
+  useEffect(() => {
+    const undrawn = [...(scroller.current?.querySelectorAll('.transcript-item:not([data-near])') ?? [])]
+    undrawn.forEach(el => drawer.current?.observe(el))
+    let timer: ReturnType<typeof setTimeout>
+    const drawBatch = () => {
+      if (Date.now() - scrolledAt.current > DRAW_PAUSE)
+        undrawn.splice(-DRAW_BATCH).forEach(el => el.setAttribute('data-near', ''))
+      if (undrawn.length) timer = setTimeout(drawBatch, DRAW_PAUSE / 3)
+    }
+    timer = setTimeout(drawBatch, DRAW_PAUSE)
+    return () => clearTimeout(timer)
+  }, [items])
   return (
     <div
       ref={card}
+      className="quote-target"
+      data-cwd={session.cwd ? tilde(session.cwd) : undefined}
       style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'var(--panel)' }}
     >
       <div className="board-header">
@@ -804,7 +1121,7 @@ function SessionTranscript({ id }: { id: string }) {
             key={t.item}
             className="badge"
             title={t.item_list === 'projects' ? 'Open the project' : 'Open the to-do list'}
-            style={{ minHeight: 0, textDecoration: t.item_done ? 'line-through' : undefined }}
+            style={{ textDecoration: t.item_done ? 'line-through' : undefined }}
             onClick={() => {
               const client = mobile ? 'mobile' : 'desktop'
               const opened =
@@ -814,21 +1131,21 @@ function SessionTranscript({ id }: { id: string }) {
               opened.catch(fail)
             }}
           >
-            {t.item_list === 'projects' ? '◆' : '☐'} {t.item_title}
+            {t.item_list === 'projects' ? <Icon name="briefcase" /> : '☐'} {clip(t.item_title, 32)}
           </button>
         ))}
         <Actions
           actions={[
             !loading && {
-              label: 'Search this chat (⌘F)',
-              text: 'Search',
-              icon: <Icon name="search" size={14} />,
-              pressed: searching,
-              onClick: () => setSearching(!searching),
+              label: previewOpen ? 'Hide preview' : 'Show preview',
+              text: previewOpen ? (mobile ? 'Open chat' : 'Hide preview') : 'Open preview',
+              icon: <Icon name={previewOpen ? 'sidebar-collapse' : 'sidebar-expand'} size={14} />,
+              pressed: previewOpen,
+              onClick: togglePreview,
             },
             !loading && {
               label: 'Terminal in this folder',
-              text: 'Terminal',
+              text: 'Open terminal',
               icon: <TerminalIcon />,
               onClick: () => openTerminal(),
             },
@@ -838,244 +1155,166 @@ function SessionTranscript({ id }: { id: string }) {
               onClick: toggleArchived,
             },
             !loading && {
+              label: 'Search this chat (⌘F)',
+              text: 'Search',
+              pressed: searching,
+              onClick: () => setSearching(!searching),
+            },
+            !loading && {
               label: watching ? 'Notifying after every turn' : 'Notify me after every turn',
               text: watching ? 'Stop notifying' : 'Notify me after every turn',
               icon: <BellIcon off={!watching} />,
               pressed: watching,
               onClick: toggleWatching,
             },
-            { label: 'Copy id', onClick: () => navigator.clipboard.writeText(id).catch(fail) },
+            { label: 'Copy ID', onClick: () => navigator.clipboard.writeText(id).catch(fail) },
             { label: 'Reload transcript', onClick: () => run('sessions.transcript', { session: id }).catch(fail) },
           ]}
         />
       </div>
-      {searching && <TranscriptSearch root={scroller} messages={messages} onClose={() => setSearching(false)} />}
-      <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <Preview
+        id={id}
+        open={preview.shown}
+        active={preview.active}
+        onSelect={tab => openTab(tab)}
+        onClose={closePreviewTab}
+        onCollapse={() => showPreview(false)}
+        tabs={preview.tabs.map(tab => {
+          if (tab === 'terminal')
+            return {
+              key: tab,
+              label: 'Terminal',
+              icon: <TerminalIcon size={12} />,
+              content: <CardSlot component="Terminal" props={{ name: terminalName }} id={`${slot ?? id}/terminal`} />,
+            }
+          const path = tab.slice('doc:'.length)
+          const cwd = session.cwd && tilde(session.cwd)
+          const unsent = isUnsent(path)
+          const image = unsent || IMAGE.test(path)
+          const name = unsent ? 'Unsent image' : path.split('/').pop()!
+          return {
+            key: tab,
+            label: name,
+            title: unsent ? name : path,
+            icon: (
+              <Icon name={image ? 'image' : HTML.test(path) ? 'file-code' : TXT.test(path) ? 'file' : 'markdown'} />
+            ),
+            content: image ? <ImageView key={tab} path={path} cwd={cwd} /> : <Doc path={path} cwd={cwd} />,
+          }
+        })}
+      >
+        {searching && <TranscriptSearch root={scroller} messages={messages} onClose={() => setSearching(false)} />}
         <div
-          ref={scroller}
-          onScroll={e => {
-            const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
-            setAway(scrollTop < -AWAY_FROM_END)
-            if (
-              rows &&
-              rows.length >= limit &&
-              scrollHeight - clientHeight + scrollTop < clientHeight * PREFETCH_SCREENS
-            )
-              setLimit(limit + PAGE)
-          }}
           style={{
+            position: 'relative',
             flex: 1,
             minHeight: 0,
-            overflow: 'auto',
-            overscrollBehavior: 'contain',
             display: 'flex',
-            flexDirection: 'column-reverse',
+            flexDirection: 'column',
           }}
         >
-          <div key={messages.length ? 'loaded' : 'loading'} className={messages.length ? 'fade-in' : undefined}>
-            {error && <div style={{ ...BUBBLE, color: 'var(--bad)' }}>{error}</div>}
-            {shownGroups.map(group => {
-              const uuid = Array.isArray(group) ? group[0].uuid : group.uuid
-              const groupKind = Array.isArray(group) && kinds.get(uuid)
-              const calls = Array.isArray(group) ? group.filter(isCall) : []
-              const count = (noun: string) => `${calls.length} ${noun}${calls.length === 1 ? '' : 's'}`
-              return (
-                <div
-                  key={uuid}
-                  className={
-                    grown.current.has(uuid)
-                      ? !Array.isArray(group) && group.role === 'assistant'
-                        ? 'transcript-item grow slow'
-                        : 'transcript-item grow'
-                      : 'transcript-item'
-                  }
-                >
-                  {Array.isArray(group) && groupKind === 'read' ? (
-                    <div style={{ ...BUBBLE, color: 'var(--muted)', fontSize: 12 }}>
-                      {denied.has(uuid) && DENIED_MARK}
-                      {count('read')} · {shortPaths(calls)}
-                    </div>
-                  ) : Array.isArray(group) && groupKind === 'write' ? (
-                    <details style={BUBBLE}>
-                      <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
-                        {denied.has(uuid) && DENIED_MARK}
-                        {count('write')}
-                        {shortPaths(calls) && ` · ${shortPaths(calls)}`}
-                      </summary>
-                      {group.map(m => {
-                        const diff = isCall(m) && writeDiff(m)
-                        if (!isCall(m) && !denied.has(m.uuid) && !m.is_error) return null
-                        return diff ? (
-                          <div key={m.uuid}>
-                            <div style={TOOL_LINE}>{shortPaths([m])}</div>
-                            <div className="diff">
-                              {diff.map((line, i) => (
-                                <div key={i} data-op={line[0]}>
-                                  {line}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ) : (
-                          <div key={m.uuid} style={TOOL_LINE}>
-                            {toolName(m) === 'Bash' ? `$ ${bashCommand(m)}` : m.text}
-                          </div>
-                        )
-                      })}
-                    </details>
-                  ) : Array.isArray(group) ? (
-                    <details style={BUBBLE}>
-                      <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
-                        {denied.has(group[0].uuid) && DENIED_MARK}
-                        {toolSummary(group)}
-                      </summary>
-                      {group.map(m => (
-                        <div key={m.uuid} style={TOOL_LINE}>
-                          {denied.has(m.uuid) && isCall(m) && DENIED_MARK}
-                          {m.text}
-                        </div>
-                      ))}
-                    </details>
-                  ) : group.role === 'subagent' || group.role === 'peer' ? (
-                    <details style={BUBBLE}>
-                      <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
-                        {group.role === 'subagent' ? 'Subagent returned' : 'Message from another agent'}
-                      </summary>
-                      <div
-                        className="message"
-                        onClick={copyCode}
-                        dangerouslySetInnerHTML={{ __html: renderMarkdown(group.text) }}
-                      />
-                    </details>
-                  ) : group.role === 'notification' ? (
-                    <details style={BUBBLE}>
-                      <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
-                        Background command finished
-                      </summary>
-                      <div style={TOOL_LINE}>{group.text}</div>
-                    </details>
-                  ) : group.role === 'thinking' ? (
-                    <div style={{ ...BUBBLE, color: 'var(--muted)', fontSize: 12, fontStyle: 'italic' }}>
-                      {Number(group.text) ? `Thought for ${group.text} tokens` : 'Thought'}
-                    </div>
-                  ) : group.role === 'compact' ? (
-                    <details style={COMPACT}>
-                      <summary style={{ cursor: 'pointer', color: '#a78bfa', fontSize: 12 }}>Context compacted</summary>
-                      <div
-                        className="message"
-                        onClick={copyCode}
-                        dangerouslySetInnerHTML={{ __html: renderMarkdown(group.text) }}
-                      />
-                    </details>
-                  ) : group.role === 'command' ? (
-                    <details style={BUBBLE}>
-                      <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
-                        Command output
-                      </summary>
-                      <div style={TOOL_LINE}>{group.text}</div>
-                    </details>
-                  ) : group.role === 'skill' || (group.role === 'user' && SKILL.test(group.text)) ? (
-                    <details style={BUBBLE}>
-                      <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: 12 }}>
-                        Skill loaded{SKILL.test(group.text) && ` · ${group.text.match(SKILL)![1]}`}
-                      </summary>
-                      <div style={TOOL_LINE}>{group.text}</div>
-                    </details>
-                  ) : (
-                    <Bubble
-                      role={group.role}
-                      label={`${new Date(group.at).toLocaleTimeString()}${group.tokens ? ` · ${Math.round(group.tokens / 1000)}k` : ''}`}
-                      text={group.text}
-                      onRunCode={mobile ? undefined : openTerminal}
-                      action={
-                        group.role === 'user' &&
-                        editable &&
-                        group.uuid !== firstPrompt && (
-                          <button
-                            type="button"
-                            className="ghost icon small"
-                            title="Edit this message, dropping it and everything after it (Esc in the message box cancels)"
-                            aria-label="Edit"
-                            onClick={() => edit(group)}
-                          >
-                            <Icon name="pencil" />
-                          </button>
-                        )
-                      }
-                    />
-                  )}
-                </div>
+          <div
+            ref={scroller}
+            onScroll={e => {
+              scrolledAt.current = Date.now()
+              const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
+              setAway(scrollTop < -AWAY_FROM_END)
+              if (
+                rows &&
+                rows.length >= limit &&
+                scrollHeight - clientHeight + scrollTop < clientHeight * PREFETCH_SCREENS
               )
-            })}
-            <div className="collapse" data-open={typing || undefined}>
-              <div>
-                <div style={BUBBLE}>
-                  <Working since={lastVisible?.at} tokens={spent} />
-                </div>
-              </div>
-            </div>
-            {subagents.map(a => (
-              <div key={a.id} className="fade-in ellipsis" style={BUBBLE} title={a.activity ?? undefined}>
-                <Working
-                  since={a.started_at ?? undefined}
-                  tokens={0}
-                  label={[a.description ?? a.agent_type ?? 'Subagent', clip(a.activity, 70)]
-                    .filter(Boolean)
-                    .join(' · ')}
-                />
-              </div>
-            ))}
-            {sending.map(p => {
-              const entry = outboxed(s => s === 'sending', p)
-              return (
-                <Bubble
-                  key={`${p.at}:${p.text}`}
-                  role="user"
-                  label="Sending"
-                  text={p.text}
-                  faded
-                  action={
-                    entry &&
-                    interruptible(session, entry) && (
-                      <button
-                        type="button"
-                        className="ghost"
-                        style={QUEUE_BUTTON}
-                        title="Stop Claude's turn so it reads this now (⌘↩ with an empty message box)"
-                        onClick={() => run('sessions.stop', { session: id }).catch(fail)}
-                      >
-                        Interrupt
-                      </button>
-                    )
-                  }
-                />
-              )
-            })}
-            {compacting && (
-              <div style={BUBBLE}>
-                <Working since={new Date(compacting.at).toISOString()} tokens={0} label="Compacting" />
-              </div>
-            )}
-            <QueuedMessage session={session} onError={setError} />
-          </div>
-        </div>
-        {away && (
-          <button
-            type="button"
-            className="icon round fade-in"
-            title="Jump to latest"
-            aria-label="Jump to latest"
-            style={{ position: 'absolute', bottom: 12, left: 12, zIndex: 2, boxShadow: 'var(--shadow)' }}
-            onClick={scrollToEnd}
+                setLimit(limit + PAGE)
+            }}
+            style={{
+              flex: 1,
+              minHeight: 0,
+              overflow: 'auto',
+              overscrollBehavior: 'contain',
+              display: 'flex',
+              flexDirection: 'column-reverse',
+            }}
           >
-            <Icon name="arrow-down" size={14} />
-          </button>
-        )}
-      </div>
-      <div className="composer-footer">
-        {decision && <DecisionPanel session={session} decision={decision} onError={setError} />}
-        <Composer session={session} onError={setError} />
-      </div>
+            <div>
+              {error && <div style={{ ...BUBBLE, color: 'var(--bad)' }}>{error}</div>}
+              {items}
+              {opened.current && (
+                <div className="collapse" data-open={typing || undefined}>
+                  <div>
+                    <div style={BUBBLE}>
+                      <Working since={lastVisible?.at} tokens={spent} />
+                    </div>
+                  </div>
+                </div>
+              )}
+              {subagents.map(a => (
+                <div
+                  key={a.id}
+                  className={opened.current?.agents.has(String(a.id)) === false ? 'fade-in ellipsis' : 'ellipsis'}
+                  style={BUBBLE}
+                  title={a.activity ?? undefined}
+                >
+                  <Working
+                    since={a.started_at ?? undefined}
+                    tokens={0}
+                    label={[a.description ?? a.agent_type ?? 'Subagent', clip(a.activity, 70)]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  />
+                </div>
+              ))}
+              {sending.map(p => {
+                const entry = outboxed(s => s === 'sending', p)
+                return (
+                  <Bubble
+                    key={`${p.at}:${p.text}`}
+                    role="user"
+                    label="Sending"
+                    text={p.text}
+                    faded
+                    action={
+                      entry &&
+                      interruptible(session, entry) && (
+                        <button
+                          type="button"
+                          className="ghost"
+                          style={QUEUE_BUTTON}
+                          title="Stop Claude's turn so it reads this now (⌘↩ with an empty message box)"
+                          onClick={() => run('sessions.stop', { session: id }).catch(fail)}
+                        >
+                          Interrupt
+                        </button>
+                      )
+                    }
+                  />
+                )
+              })}
+              {compacting && (
+                <div style={BUBBLE}>
+                  <Working since={new Date(compacting.at).toISOString()} tokens={0} label="Compacting" />
+                </div>
+              )}
+              <QueuedMessage session={session} onError={setError} />
+            </div>
+          </div>
+          {away && (
+            <button
+              type="button"
+              className="icon round fade-in"
+              title="Jump to latest"
+              aria-label="Jump to latest"
+              style={{ position: 'absolute', bottom: 12, left: 12, zIndex: 2, boxShadow: 'var(--shadow)' }}
+              onClick={scrollToEnd}
+            >
+              <Icon name="arrow-down" size={14} />
+            </button>
+          )}
+        </div>
+        <div className="composer-footer">
+          {decision && <DecisionPanel session={session} decision={decision} onError={setError} />}
+          <Composer session={session} onError={setError} />
+        </div>
+      </Preview>
     </div>
   )
 }
@@ -1096,19 +1335,27 @@ function TranscriptSearch({
 
   useEffect(() => {
     const needle = text.trim().toLowerCase()
-    const found: Range[] = []
-    const walker = root.current && needle ? document.createTreeWalker(root.current, NodeFilter.SHOW_TEXT) : undefined
-    for (let node = walker && walker.nextNode(); node; node = walker!.nextNode()) {
-      const value = node.nodeValue!.toLowerCase()
-      for (let at = value.indexOf(needle); at >= 0; at = value.indexOf(needle, at + needle.length)) {
-        const range = new Range()
-        range.setStart(node, at)
-        range.setEnd(node, at + needle.length)
-        found.push(range)
+    const search = () => {
+      const found: Range[] = []
+      const walker =
+        root.current && needle.length >= MIN_SEARCH
+          ? document.createTreeWalker(root.current, NodeFilter.SHOW_TEXT)
+          : undefined
+      for (let node = walker && walker.nextNode(); node; node = walker!.nextNode()) {
+        const value = node.nodeValue!.toLowerCase()
+        for (let at = value.indexOf(needle); at >= 0; at = value.indexOf(needle, at + needle.length)) {
+          const range = new Range()
+          range.setStart(node, at)
+          range.setEnd(node, at + needle.length)
+          found.push(range)
+        }
       }
+      setRanges(found)
+      setCurrent(found.length - 1)
     }
-    setRanges(found)
-    setCurrent(found.length - 1)
+    if (needle.length < MIN_SEARCH) return search()
+    const timer = setTimeout(search, SEARCH_DEBOUNCE)
+    return () => clearTimeout(timer)
   }, [text, messages])
 
   useEffect(() => {
@@ -1149,7 +1396,8 @@ function TranscriptSearch({
         }}
       />
       <span className="sub">
-        {text.trim() && (ranges.length ? `${ranges.length - current}/${ranges.length}` : 'No matches')}
+        {text.trim().length >= MIN_SEARCH &&
+          (ranges.length ? `${ranges.length - current}/${ranges.length}` : 'No matches')}
       </span>
       <button
         className="ghost icon small"

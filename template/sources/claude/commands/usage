@@ -1,0 +1,10 @@
+#!/usr/bin/env -S python3 -I
+"""claude.usage: prints the all-models weekly usage that /usage reports, as {percent, resets}."""
+import json, re, subprocess
+
+output = subprocess.run(["claude", "-p", "/usage", "--no-session-persistence"],
+                        capture_output=True, text=True, check=True).stdout
+match = re.search(r"Current week \(all models\): (\d+(?:\.\d+)?)% used · resets (.+)", output)
+if not match:
+    raise SystemExit(f"No weekly usage in /usage output:\n{output}")
+print(json.dumps({"percent": float(match[1]), "resets": match[2].strip()}))

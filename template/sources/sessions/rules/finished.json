@@ -3,6 +3,6 @@
   "when": { "view": "sessions_finished" },
   "key": "{session}@{armed_at}",
   "run": "core.notify",
-  "args": { "title": "{title}", "body": "Finished: {status}" },
+  "args": { "title": "{title}", "body": "{outcome}" },
   "max_per_hour": 60
 }

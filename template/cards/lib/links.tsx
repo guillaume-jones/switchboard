@@ -2,18 +2,37 @@ import { useMemo, useState } from 'react'
 import { useQuery } from 'switchboard'
 import { TONES } from './sessions'
 
+const PR_TONES: Record<string, string> = {
+  needs_action: 'warn',
+  ready: 'good',
+  awaiting_review: 'accent',
+  draft: 'faint',
+  merged: 'good',
+  closed: 'bad',
+}
 const CHIP_CHARS = 32
 export const clip = (text: string) => (text.length > CHIP_CHARS ? `${text.slice(0, CHIP_CHARS - 1).trimEnd()}…` : text)
 export const linkTone = (link: { kind: string; status?: string | null }) =>
-  link.kind === 'session' ? TONES[link.status ?? ''] : link.kind === 'project' ? 'accent' : undefined
+  link.kind === 'session'
+    ? TONES[link.status ?? '']
+    : link.kind === 'pr'
+      ? PR_TONES[link.status ?? '']
+      : link.kind === 'project'
+        ? 'accent'
+        : undefined
 
-const parseLink = (text: string) =>
-  /^https?:\/\/\S+$/.test(text) ? { ref: text, kind: 'url', label: new URL(text).hostname } : undefined
+const parseLink = (text: string) => {
+  if (!/^https?:\/\/\S+$/.test(text)) return undefined
+  const pr = text.match(/^https:\/\/github\.com\/[^/]+\/([^/]+)\/pull\/(\d+)/)
+  if (pr) return { ref: pr[0], kind: 'pr', label: `${pr[1]}#${pr[2]}` }
+  return { ref: text, kind: 'url', label: new URL(text).hostname }
+}
 
 export type Linkable = { ref: string; kind: string; label: string; title?: string; status?: string | null }
 
 export const KIND_NAMES: Record<string, string> = {
   session: 'Chat',
+  pr: 'PR',
   url: 'Link',
   project: 'Project',
 }
@@ -23,7 +42,7 @@ const words = (text: string) => new Set(text.toLowerCase().match(/[a-z]+-\d+|[a-
 
 /**
  * Candidates sharing words with `context` first, each shared word weighted by how few candidates contain it, so
- * distinctive words count and common ones barely do; ties keep the query's most-recent-first order.
+ * identifiers and distinctive words count and common ones barely do; ties keep the query's most-recent-first order.
  */
 const rankByContext = (candidates: Linkable[], context: string) => {
   const wanted = words(context)
@@ -36,8 +55,8 @@ const rankByContext = (candidates: Linkable[], context: string) => {
 }
 
 /**
- * One box for every kind of link: `workstreams.linkables` (chats and projects; any source that joins it later) ranked
- * by `rankByContext` and narrowed by every typed word, and a pasted URL offered as a link of its own.
+ * One box for every kind of link: `workstreams.linkables` (chats, open PRs and projects; any source that joins it later)
+ * ranked by `rankByContext` and narrowed by every typed word, and a pasted URL offered as a link of its own.
  */
 export function LinkPicker({
   context,
@@ -77,7 +96,7 @@ export function LinkPicker({
     <Combobox
       text={text}
       onText={setText}
-      placeholder="Search chats and projects, or paste a link"
+      placeholder="Search chats, PRs and projects, or paste a link"
       options={options}
       onPick={option => {
         onPick(candidates.find(c => c.ref === option.key)!)
@@ -88,7 +107,6 @@ export function LinkPicker({
 }
 
 const DROPDOWN = { top: 'calc(100% + 4px)', bottom: 'auto', maxHeight: 220 } as const
-export const NEW = '\u0000new'
 export type Option = { key: string; badge: string; tone?: string; label?: string }
 
 /** A text box whose options float over what follows it; `.todo-row:focus-within` stops the row clipping them. */

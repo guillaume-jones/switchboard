@@ -1,0 +1,7 @@
+{
+  "id": "claude-usage",
+  "when": { "schedule": "0 * * * *" },
+  "run": "claude.usage",
+  "into": "claude.usage_upsert",
+  "log": false
+}

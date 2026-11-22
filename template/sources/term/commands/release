@@ -1,0 +1,14 @@
+#!/bin/zsh
+# term.release {name}: ends the tmux session `name` if every pane sits at a shell prompt, else unlinks it from its chat so it is listed with the other terminals.
+name=$SWB_ARG_NAME
+panes=(${(f)"$(tmux list-panes -s -t "=$name" -F '#{pane_current_command}')"}) || exit 1
+busy=(${panes:#(-|)(zsh|bash|sh|fish|dash)})
+if (( $#busy )); then
+  tmux set-option -u -t "=$name:" @chat
+  summary="kept, running ${(j:, :)${(u)busy}}"
+else
+  tmux kill-session -t "=$name"
+  summary=closed
+fi
+$SOURCE_DIR/commands/list | $SWB write term.sync
+print -r -- "{\"outcome\": \"success\", \"summary\": \"$name $summary\"}"

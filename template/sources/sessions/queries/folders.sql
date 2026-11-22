@@ -3,6 +3,7 @@ FROM sessions_items i
 LEFT JOIN sessions.agents a ON a.session = i.id
 WHERE coalesce(a.cwd, i.cwd) <> ''
   AND coalesce(a.cwd, i.cwd) || '/' NOT LIKE '%/tmp/%' AND coalesce(a.cwd, i.cwd) || '/' NOT LIKE '%/.claude/%'
+  AND coalesce(a.cwd, i.cwd) NOT LIKE '/private/var/%' AND coalesce(a.cwd, i.cwd) NOT LIKE '/var/%'
 GROUP BY 1
 ORDER BY used DESC
 LIMIT :limit

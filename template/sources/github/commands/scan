@@ -1,0 +1,82 @@
+#!/usr/bin/env -S python3 -I
+"""github.scan: saves your open PRs and the 100 last updated closed ones, with review, merge and CI state, the number of
+human code comments posted after the latest commit, and the local checkout among your chats' and projects' folders."""
+import datetime, json, os, re, shutil, subprocess, sys
+
+COMMON = "url headRefName number title state isDraft createdAt closedAt repository { nameWithOwner }"
+OPEN = COMMON + """ reviewDecision mergeStateStatus isInMergeQueue autoMergeRequest { enabledAt }
+  latestOpinionatedReviews(last: 20) { nodes { state } }
+  commits(last: 1) { nodes { commit { oid committedDate statusCheckRollup { state } } } }
+  reviewThreads(last: 30) { nodes { comments(last: 20) { nodes { createdAt author { __typename login } } } } }"""
+QUERY = f"""{{ viewer {{ login }}
+  open: search(query: "is:pr author:@me is:open archived:false", type: ISSUE, first: 50) {{ nodes {{ ... on PullRequest {{ {OPEN} }} }} }}
+  closed: search(query: "is:pr author:@me is:closed sort:updated-desc", type: ISSUE, first: 100) {{ nodes {{ ... on PullRequest {{ {COMMON} }} }} }}
+}}"""
+
+
+def fail(summary):
+    print(json.dumps({"outcome": "failure", "summary": summary}))
+    sys.exit(1)
+
+
+def swb(*args, **options):
+    return subprocess.run([os.environ["SWB"], *args], capture_output=True, text=True, check=True, **options).stdout
+
+
+def milliseconds(iso):
+    return iso and int(datetime.datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp() * 1000)
+
+
+def checkouts():
+    folders = [p["folder"] for p in json.loads(swb("query", "workstreams_items")) if p["folder"]]
+    folders += [s["cwd"] for s in json.loads(swb("query", "sessions.folders", "limit=50"))]
+    found = {}
+    for folder in dict.fromkeys(folders):
+        path = os.path.expanduser(folder)
+        if not os.path.isabs(path):
+            path = os.path.expanduser(f"~/Documents/{path}")
+        git = subprocess.run(["git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                             capture_output=True, text=True)
+        if git.returncode:
+            continue
+        common = git.stdout.strip()
+        if os.path.basename(common) != ".git":
+            continue
+        root = os.path.dirname(common)
+        remote = subprocess.run(["git", "-C", root, "config", "--get", "remote.origin.url"],
+                                capture_output=True, text=True).stdout.strip()
+        repo = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$", remote)
+        if repo:
+            found.setdefault(repo[1].lower(), root)
+    return found
+
+
+if not shutil.which("gh"):
+    fail("Install the GitHub CLI (gh), then run gh auth login")
+response = subprocess.run(["gh", "api", "graphql", "-f", f"query={QUERY}"], capture_output=True, text=True)
+if response.returncode:
+    fail((response.stderr.strip().splitlines() or ["gh failed"])[0])
+data = json.loads(response.stdout)["data"]
+me = data["viewer"]["login"]
+folders = checkouts()
+
+prs = []
+for pr in data["open"]["nodes"] + data["closed"]["nodes"]:
+    if not pr:
+        continue
+    commit = ((pr.get("commits") or {}).get("nodes") or [{}])[0].get("commit") or {}
+    head_at = milliseconds(commit.get("committedDate")) or 0
+    comments = [c for t in (pr.get("reviewThreads") or {}).get("nodes", []) for c in t["comments"]["nodes"]]
+    human = [c for c in comments if c["author"] and c["author"]["__typename"] == "User" and c["author"]["login"] != me]
+    reviews = {r["state"] for r in (pr.get("latestOpinionatedReviews") or {}).get("nodes", [])}
+    # reviewDecision is null in repos that don't require reviews
+    decision = pr.get("reviewDecision") or next((s for s in ("CHANGES_REQUESTED", "APPROVED") if s in reviews), None)
+    repo = pr["repository"]["nameWithOwner"]
+    prs.append({"url": pr["url"], "repo": repo, "number": pr["number"], "title": pr["title"], "state": pr["state"],
+                "draft": pr["isDraft"], "review_decision": decision, "merge_state": pr.get("mergeStateStatus"),
+                "ci": (commit.get("statusCheckRollup") or {}).get("state"),
+                "new_comments": sum(milliseconds(c["createdAt"]) > head_at for c in human),
+                "folder": folders.get(repo.lower()), "created_at": milliseconds(pr["createdAt"]),
+                "closed_at": milliseconds(pr["closedAt"]), "raw": json.dumps(pr)})
+swb("write", "github.prs_upsert", input=json.dumps(prs))
+print(json.dumps({"outcome": "success", "summary": f"saved {len(prs)} PRs"}))

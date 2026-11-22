@@ -1,0 +1,43 @@
+#!/bin/zsh
+# voice.install: downloads what voice.listen needs (540 MB) into data/voice, checked against files/release.sh. Needs
+# only what macOS and its Command Line Tools come with. Safe to run again; deleting data/voice uninstalls it.
+fail() {
+  print -r -- "{\"outcome\": \"failure\", \"summary\": \"$1\"}"
+  exit 1
+}
+[[ $(uname -s) == Darwin && $(uname -m) == arm64 ]] || fail "Dictation needs a Mac with Apple silicon"
+/usr/bin/xcode-select -p >/dev/null 2>&1 && /usr/bin/xcrun -f python3 >/dev/null 2>&1 ||
+  fail "Dictation needs the Command Line Tools: run xcode-select --install, then try again"
+
+source $SOURCE_DIR/files/release.sh
+voice=$SWITCHBOARD_HOME/data/voice
+mkdir -p $voice/model || fail "Could not create data/voice"
+cd $voice || fail "Could not open data/voice"
+
+zmodload zsh/system
+: >> .install.lock
+zsystem flock -t 1500 .install.lock || fail "Dictation is already being installed"
+# Left by an install that was killed.
+find . -maxdepth 1 -type d -name '.install.?*' -exec rm -rf {} +
+staging=$(mktemp -d .install.XXXXXX) || fail "Could not create a folder to download into"
+trap 'rm -rf $staging' EXIT
+trap 'exit 1' HUP INT TERM
+
+fetch() {
+  /usr/bin/curl -fsSL --retry 3 --connect-timeout 20 -o $3 $1 || fail "Could not download ${1:t}. Check the connection and the free space"
+  print -r -- "$2  $3" | /usr/bin/shasum -a 256 -c - >&2 || fail "${1:t} did not match its checksum, so it was not installed"
+}
+
+if [[ ! -d $lib ]]; then
+  fetch $wheel_url $wheel_sha $staging/wheel.zip
+  fetch $native_url $native_sha $staging/native.zip
+  for archive in wheel native; do
+    /usr/bin/unzip -q $staging/$archive.zip -d $staging/lib || fail "Could not unpack the speech library"
+  done
+  mv $staging/lib $lib || fail "Could not install the speech library"
+fi
+if [[ ! -f $model ]]; then
+  fetch $model_url $model_sha $staging/model
+  mv $staging/model $model || fail "Could not install the speech model"
+fi
+print -r -- '{"outcome": "success", "summary": "Dictation installed"}'

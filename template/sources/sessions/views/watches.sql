@@ -1,4 +1,4 @@
-SELECT w.session, w.armed_at, w.sticky, i.title, i.status,
+SELECT w.session, w.armed_at, i.title, i.status,
   i.status IN ('ready', 'errored', 'ended', 'stopped')
     AND max(coalesce(s.updated_at, 0), coalesce(a.changed_at, 0)) > w.armed_at AS done
 FROM sessions.watches w

@@ -1,0 +1,23 @@
+#!/usr/bin/env -S python3 -I
+"""workstreams.notes-save {path, content, base}: saves content to a project's notes file unless it no longer holds base,
+then restages it for docs_files (docs.read)."""
+import json, os, subprocess, sys
+
+args = json.loads(sys.stdin.readline())
+path, file = args["path"], os.path.expanduser(args["path"])
+items = json.loads(subprocess.run([os.environ["SWB"], "query", "workstreams_items"], check=True, capture_output=True, text=True).stdout)
+try:
+    with open(file, encoding="utf-8") as f:
+        current = f.read()
+except OSError:
+    current = None
+if not os.path.isabs(file) or path not in {i["notes_file"] for i in items}:
+    failure = f"{path} is not a project's notes file"
+elif current != args["base"]:
+    failure = "The file changed on disk since you started editing; your edit was not saved"
+else:
+    failure = None
+    with open(file, "w", encoding="utf-8") as f:
+        f.write(args["content"])
+    subprocess.run([os.path.join(os.environ["SWITCHBOARD_HOME"], "sources", "docs", "commands", "read")], check=True)
+print(json.dumps({"outcome": "failure" if failure else "success", "summary": failure or f"saved {path}"}))

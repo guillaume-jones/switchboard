@@ -4,7 +4,14 @@ import { Actions } from './lib/actions'
 import { Icon } from './lib/icons'
 import { useMobile } from './lib/theme'
 
-type Item = { id: number; title: string; description: string; done: number; folder: string | null }
+type Item = {
+  id: number
+  title: string
+  description: string
+  done: number
+  folder: string | null
+  notes_file: string | null
+}
 type Todo = { id: number; list: string; title: string; done: number; position: number }
 type ProjectLink = {
   project: number
@@ -46,20 +53,18 @@ export default function Project({ project, layout }: CardProps<{ project: number
   if (!item) return items ? <div className="empty">This project no longer exists</div> : null
 
   const newChat = async () => {
-    const list = (later: boolean) =>
-      todos
-        .filter(t => (t.list === 'later') === later)
-        .sort((a, b) => a.position - b.position)
-        .map(t => `- ${t.title}`)
-        .join('\n')
-    const now = list(false)
-    const later = list(true)
+    const open = [...todos].sort((a, b) => a.position - b.position)
+    const list = (heading: string, included: (list: string) => boolean) => {
+      const titles = open.filter(t => included(t.list)).map(t => `- ${t.title}`)
+      return titles.length > 0 && `To-dos ${heading}:\n${titles.join('\n')}`
+    }
     const shared = links.filter(l => l.kind !== 'session')
     const prompt = [
       `Project: ${item.title}`,
-      item.description.trim(),
-      now && `To-dos now:\n${now}`,
-      later && `To-dos later:\n${later}`,
+      item.notes_file ? `Notes: ${item.notes_file}` : item.description.trim(),
+      list('now', l => l !== 'later' && l !== 'blocked'),
+      list('later', l => l === 'later'),
+      list('blocked', l => l === 'blocked'),
       shared.length > 0 && `Links:\n${shared.map(l => `- ${l.kind}: ${l.title} (${l.ref})`).join('\n')}`,
     ]
       .filter(Boolean)

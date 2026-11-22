@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, type CSSProperties } from 'react'
 import { CardSlot, run, useConnection } from 'switchboard'
+import { ImagePeek } from './lib/sessions'
 import { THEME, useMobile } from './lib/theme'
 
 /** Opaque, so iOS extends its colour into the status bar instead of blurring the content below it. */
@@ -19,7 +20,7 @@ export default function Root() {
     if (mobile) return
     const open = (e: MouseEvent) => {
       const link = e.composedPath().find((el): el is HTMLAnchorElement => el instanceof HTMLAnchorElement && !!el.href)
-      if (!link || !/^(https?:|mailto:|slack:)/i.test(link.href)) return
+      if (!link || !/^(https?:|mailto:)/i.test(link.href)) return
       e.preventDefault()
       run('ui.open', { url: link.href }).catch(console.error)
     }
@@ -36,6 +37,7 @@ export default function Root() {
       <main style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <CardSlot component="Boards" id="boards" props={boards} />
       </main>
+      <ImagePeek />
     </div>
   )
 }

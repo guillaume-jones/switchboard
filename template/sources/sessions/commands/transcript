@@ -23,9 +23,9 @@ jq -cs '(map(select(.uuid)) | INDEX(.uuid)) as $by
   | .message.content |= (if type == "array" then map(
       if .type == "tool_result" then .content |= ((if type == "array" then map(
           if .type == "text" then .text elif .type == "image" then "[image]" else empty end) | join(" ")
-        else tostring end) | .[0:500])
+        else tostring end) | .[0:600])
       elif .type == "image" then {type}
-      elif .type == "tool_use" then .name as $name | .input |= (tostring | if (["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"] | index([$name])) then . else .[0:500] end)
+      elif .type == "tool_use" then .name as $name | .input |= (tostring | if (["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"] | index([$name])) then . else .[0:600] end)
       elif .type == "thinking" then {type}
       else . end) else . end))' $path_ | "$SWB" write sessions.transcript_add || exit 1
 print -r -- '{"outcome": "success", "summary": "loaded"}'

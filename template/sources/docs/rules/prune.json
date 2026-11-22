@@ -1,0 +1,1 @@
+{ "id": "docs-prune", "when": { "schedule": "0 4 * * 0" }, "into": "docs.prune", "args": {} }

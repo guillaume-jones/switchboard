@@ -1,0 +1,1 @@
+{ "id": "ui-seed", "when": { "view": "ui_unseeded" }, "key": "{grid}", "into": "ui.reset", "args": { "grid": "{grid}" } }

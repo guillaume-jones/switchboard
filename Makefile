@@ -1,6 +1,13 @@
 TRIPLE := $(shell rustc -vV | sed -n 's/^host: //p')
 OS := $(shell uname -s)
 
+# To keep macOS permissions across rebuilds, create a self-signed code signing certificate with this name.
+LOCAL_IDENTITY := Switchboard Local
+ifneq ($(shell security find-identity -p codesigning 2>/dev/null | grep '"$(LOCAL_IDENTITY)"'),)
+APPLE_SIGNING_IDENTITY ?= $(LOCAL_IDENTITY)
+export APPLE_SIGNING_IDENTITY
+endif
+
 .PHONY: dev build install test bench check fmt sidecar
 
 dev: sidecar | app/node_modules

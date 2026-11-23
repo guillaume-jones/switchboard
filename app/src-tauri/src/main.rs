@@ -9,6 +9,7 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 
+mod mic;
 #[cfg(target_os = "macos")]
 mod notifications;
 mod pty;
@@ -24,6 +25,7 @@ pub(crate) struct App {
     subs: Mutex<HashSet<u64>>,
     remote: remote::Clients,
     ptys: pty::Ptys,
+    mics: mic::Mics,
     /// Set once the board is served to other devices.
     push: OnceLock<push::Push>,
     hotkey: Mutex<String>,
@@ -254,17 +256,27 @@ fn main() {
             subs: Mutex::default(),
             remote: remote::Clients::default(),
             ptys: pty::Ptys::default(),
+            mics: mic::Mics::default(),
             push: OnceLock::new(),
             hotkey: Mutex::default(),
             badge: Mutex::default(),
             badge_count: tokio::sync::watch::Sender::new(0),
         })
-        .invoke_handler(tauri::generate_handler![call, pty::pty_open, pty::pty_input, pty::pty_resize, pty::pty_close])
+        .invoke_handler(tauri::generate_handler![
+            call,
+            pty::pty_open,
+            pty::pty_input,
+            pty::pty_resize,
+            pty::pty_close,
+            mic::mic_open,
+            mic::mic_close
+        ])
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Started {
                 let state = webview.state::<App>();
                 let ids: Vec<u64> = state.subs.lock().unwrap().drain().collect();
                 state.ptys.close_all();
+                state.mics.close_all();
                 if let Ok(engine) = &*state.engine.read().unwrap() {
                     ids.into_iter().for_each(|id| engine.unsubscribe(id));
                 }

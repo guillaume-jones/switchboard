@@ -10,7 +10,8 @@ body {
   background: var(--bg, Canvas);
   color: var(--fg, CanvasText);
 }
-.slot {
+.slot,
+.region {
   display: contents;
 }
 .slot .slot.focused > * {

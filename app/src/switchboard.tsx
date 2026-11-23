@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ReactNode,
   type SyntheticEvent,
 } from 'react'
 import { Boundary } from './boundary'
@@ -18,7 +19,8 @@ import * as bridge from './bridge'
 import type { Params, Row, Size } from './bridge'
 import { loadCard, watchCards, type CardComponent } from './cards'
 import { useLoadedConfig } from './config'
-import { claimFocus, mountSlot, type SlotFrame } from './focus'
+import { claimFocus, mountSlot, releaseFocus, type SlotFrame } from './focus'
+import type { ActionHandler } from './keymap'
 import { subscription } from './subscriptions'
 import { useRemoteStatus } from './remote'
 
@@ -55,6 +57,18 @@ export function useExpose(vars: Record<string, unknown>) {
   })
 }
 
+export function useActions(actions: Record<string, ActionHandler>) {
+  const frame = useContext(FrameContext)
+  useLayoutEffect(() => {
+    if (!frame) return
+    frame.actions ??= {}
+    Object.assign(frame.actions, actions)
+    return () => {
+      for (const name in actions) if (frame.actions?.[name] === actions[name]) delete frame.actions[name]
+    }
+  })
+}
+
 type SlotProps = { component: string; props?: Params; size?: Size; id?: string }
 
 export const CardSlot = memo(function CardSlot({ component, props, size = 'full', id }: SlotProps) {
@@ -65,6 +79,7 @@ export const CardSlot = memo(function CardSlot({ component, props, size = 'full'
     card: component,
     size,
     vars: {},
+    actions: {},
     parent,
     depth: (parent?.depth ?? 0) + 1,
     el: null,
@@ -94,6 +109,54 @@ export const CardSlot = memo(function CardSlot({ component, props, size = 'full'
     </FrameContext>
   )
 })
+
+type RegionProps = {
+  name: string
+  vars?: Record<string, unknown>
+  actions?: Record<string, ActionHandler>
+  children: ReactNode
+}
+
+/** A part of a card that joins the context stack as `region:<name>` while focus is inside it. */
+export function Region({ name, vars, actions, children }: RegionProps) {
+  const parent = useContext(FrameContext)
+  const [frame] = useState((): SlotFrame => ({
+    card: name,
+    size: parent?.size ?? 'full',
+    vars: {},
+    actions: {},
+    region: true,
+    parent,
+    depth: parent?.depth ?? 0,
+    el: null,
+  }))
+  const el = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    frame.card = name
+    frame.size = parent?.size ?? 'full'
+    Object.assign(frame.vars, vars)
+    Object.assign(frame.actions!, actions)
+    return () => {
+      for (const key in vars) delete frame.vars[key]
+      for (const key in actions) if (frame.actions?.[key] === actions[key]) delete frame.actions[key]
+    }
+  })
+  useEffect(() => mountSlot(frame, el.current!), [frame])
+  const claim = (e: SyntheticEvent) => claimFocus(frame, e.nativeEvent)
+  return (
+    <FrameContext value={frame}>
+      <div
+        className="region"
+        ref={el}
+        onPointerDown={claim}
+        onFocus={claim}
+        onBlur={e => !el.current?.contains(e.relatedTarget) && releaseFocus(frame)}
+      >
+        {children}
+      </div>
+    </FrameContext>
+  )
+}
 
 function Card({ component, props }: { component: Promise<CardComponent>; props: Params }) {
   const Component = use(component)

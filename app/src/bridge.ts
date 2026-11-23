@@ -5,7 +5,14 @@ import * as remote from './remote'
 export type Row = Record<string, any>
 export type Params = Record<string, unknown>
 export type Size = 'compact' | 'full'
-export type Binding = { key: string; context?: string; command?: string | null; write?: string | null; args?: Params }
+export type Binding = {
+  key: string
+  context?: string
+  command?: string | null
+  write?: string | null
+  action?: string | null
+  args?: Params
+}
 export type Config = {
   root: string
   depth_cap: number

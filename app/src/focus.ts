@@ -1,6 +1,6 @@
 import type { Frame } from './keymap'
 
-/** A mounted CardSlot in the context stack. One object per slot for its whole lifetime. */
+/** A mounted CardSlot or Region in the context stack. One object per slot for its whole lifetime. */
 export type SlotFrame = Frame & { parent: SlotFrame | null; depth: number; el: HTMLElement | null }
 
 const FOCUSED_CLASS = 'focused'
@@ -10,10 +10,16 @@ let focused: SlotFrame | null = null
 let lastClaim: Event | null = null
 const frameByElement = new WeakMap<Element, SlotFrame>()
 
+/** The card a frame is, or is a region of. */
+const cardOf = (frame: SlotFrame | null) => {
+  while (frame?.region) frame = frame.parent
+  return frame
+}
+
 function setFocused(frame: SlotFrame | null) {
-  focused?.el?.classList.remove(FOCUSED_CLASS)
+  cardOf(focused)?.el?.classList.remove(FOCUSED_CLASS)
   focused = frame
-  frame?.el?.classList.add(FOCUSED_CLASS)
+  cardOf(frame)?.el?.classList.add(FOCUSED_CLASS)
 }
 
 /** Call from an effect once the slot's element exists; returns the cleanup. The first root slot takes focus. */
@@ -31,6 +37,11 @@ export function claimFocus(frame: SlotFrame, event: Event) {
   if (event === lastClaim) return
   lastClaim = event
   setFocused(frame)
+}
+
+/** Hands focus from a region back to its parent once focus leaves it, unless something else claimed it first. */
+export function releaseFocus(frame: SlotFrame) {
+  if (focused === frame) setFocused(frame.parent)
 }
 
 /** The focused slot and its ancestors, outermost first. */

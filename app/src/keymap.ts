@@ -1,20 +1,38 @@
 import type { Binding, Params, Size } from './bridge'
 
-/** One card in the context stack, which runs outermost first. */
-export type Frame = { card: string; size: Size; vars: Record<string, unknown> }
-/** A binding whose context holds at stack index `depth` (-1 for bindings without a context). */
-export type Hit = { binding: Binding; depth: number; args: Params; missing: string[] }
-export type Action = { kind: 'command' | 'write'; name: string }
+/** A card action (`useActions`), called with the binding's args and the key or mouse event that fired it, if any. */
+export type ActionHandler = (args: Params, event?: KeyboardEvent | MouseEvent) => void
+/** One card, or a focused `Region` of one (`region`, named by `card`), in the context stack, which runs outermost first. */
+export type Frame = {
+  card: string
+  size: Size
+  vars: Record<string, unknown>
+  actions?: Record<string, ActionHandler>
+  region?: boolean
+}
+/**
+ * A binding whose context holds at stack index `depth` (-1 for bindings without a context). `handler` is the card
+ * action an `action` binding calls; an unregistered action is listed in `missing`.
+ */
+export type Hit = { binding: Binding; depth: number; args: Params; missing: string[]; handler?: ActionHandler }
+export type Action = { kind: 'command' | 'write' | 'action'; name: string }
 type Predicate = (stack: Frame[], index: number) => boolean
 
 /** `null` for a binding that unbinds its key (`"command": null`). */
 export function bindingAction(binding: Binding): Action | null {
   if (binding.write) return { kind: 'write', name: binding.write }
   if (binding.command) return { kind: 'command', name: binding.command }
+  if (binding.action) return { kind: 'action', name: binding.action }
   return null
 }
 
-/** Resolves `name` or `Card.name` from frame `index` outwards. `size` and `focused` are reserved per-frame variables. */
+const EDITABLE = 'input, textarea, select, [contenteditable]:not([contenteditable=false])'
+
+/** Whether typing into `target` enters text: an input, textarea, select or contenteditable element. */
+export const isEditable = (target: EventTarget | null | undefined) =>
+  typeof Element !== 'undefined' && target instanceof Element && !!target.closest(EDITABLE)
+
+/** Resolves `name` or `Card.name` from frame `index` outwards. `size` and `focused` (the innermost card) are reserved. */
 export function variable(stack: Frame[], index: number, name: string): unknown {
   const dot = name.lastIndexOf('.')
   const card = dot < 0 ? null : name.slice(0, dot)
@@ -22,13 +40,34 @@ export function variable(stack: Frame[], index: number, name: string): unknown {
   for (let i = index; i >= 0; i--) {
     const frame = stack[i]
     if (card !== null && frame.card !== card) continue
-    const value = key === 'size' ? frame.size : key === 'focused' ? i === stack.length - 1 : frame.vars[key]
+    const value =
+      key === 'size'
+        ? frame.size
+        : key === 'focused'
+          ? !frame.region && stack.slice(i + 1).every(inner => inner.region)
+          : frame.vars[key]
     if (card !== null || value != null) return value
+  }
+}
+
+const CARD_ACTION = /^([A-Z][\w-]*)\.(.+)$/
+
+/** Resolves action `name`, or `Card.name` for a capitalized card name, from frame `index` outwards. */
+export function cardAction(stack: Frame[], index: number, name: string): ActionHandler | undefined {
+  const [, card, action] = CARD_ACTION.exec(name) ?? [undefined, null, name]
+  for (let i = index; i >= 0; i--) {
+    const frame = stack[i]
+    if (card !== null && frame.card !== card) continue
+    const handler = frame.actions?.[action]
+    if (handler) return handler
   }
 }
 
 const TOKEN = /&&|\|\||[!>()]|[^\s&|!>()]+/g
 const OPERATOR_START = /^[&|>)]/
+
+/** Whether a binding's context names a region, which lets it take keys that would otherwise type into a text field. */
+export const namesRegion = (binding: Binding) => !!binding.context?.match(TOKEN)?.some(t => t.startsWith('region:'))
 
 /** Compiles a binding context. Operators from loosest: `>` (descendant of), `||`, `&&`, `!`. */
 export function parse(context: string): Predicate {
@@ -61,7 +100,11 @@ export function parse(context: string): Predicate {
     if (token === undefined || OPERATOR_START.test(token)) throw unexpected(token)
     if (token.startsWith('card:')) {
       const card = token.slice('card:'.length)
-      return (stack, i) => stack[i].card === card
+      return (stack, i) => !stack[i].region && stack[i].card === card
+    }
+    if (token.startsWith('region:')) {
+      const region = token.slice('region:'.length)
+      return (stack, i) => !!stack[i].region && stack[i].card === region
     }
     return (stack, i) => {
       const value = variable(stack, i, token)
@@ -102,8 +145,9 @@ function predicate(context: string): Predicate {
 const WHOLE_VARIABLE = /^\{([\w.-]+)\}$/
 const VARIABLE = /\{([\w.-]+)\}/g
 
-/** `"{x}"` takes x's value as is; `"a {x}"` interpolates it as a string. */
-function fillArgs(args: Params = {}, stack: Frame[], index: number) {
+/** `"{x}"` takes x's value as is; `"a {x}"` interpolates it as a string. An action binding also resolves its handler. */
+function fillArgs(binding: Binding, stack: Frame[], index: number) {
+  const { args = {}, action } = binding
   const missing: string[] = []
   const lookup = (name: string) => {
     const value = variable(stack, index, name)
@@ -119,7 +163,9 @@ function fillArgs(args: Params = {}, stack: Frame[], index: number) {
     const whole = WHOLE_VARIABLE.exec(value)
     filled[key] = whole ? lookup(whole[1]) : value.replace(VARIABLE, (_, name: string) => String(lookup(name)))
   }
-  return { args: filled, missing }
+  const handler = action ? cardAction(stack, index, action) : undefined
+  if (action && !handler) missing.push(action)
+  return { args: filled, missing, handler }
 }
 
 /**
@@ -134,12 +180,12 @@ export function matchBindings(candidates: Binding[], stack: Frame[]): Hit[] {
       const binding = candidates[n]
       if (!binding.context || matched.has(binding) || !predicate(binding.context)(stack, depth)) continue
       matched.add(binding)
-      hits.push({ binding, depth, ...fillArgs(binding.args, stack, depth) })
+      hits.push({ binding, depth, ...fillArgs(binding, stack, depth) })
     }
   }
   for (let n = candidates.length - 1; n >= 0; n--) {
     const binding = candidates[n]
-    if (!binding.context) hits.push({ binding, depth: -1, ...fillArgs(binding.args, stack, stack.length - 1) })
+    if (!binding.context) hits.push({ binding, depth: -1, ...fillArgs(binding, stack, stack.length - 1) })
   }
   return hits
 }

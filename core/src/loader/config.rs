@@ -581,7 +581,7 @@ pub(super) fn parse_rule(
     })
 }
 
-const BINDING_FIELDS: [&str; 5] = ["key", "context", "command", "write", "args"];
+const BINDING_FIELDS: [&str; 6] = ["key", "context", "command", "write", "action", "args"];
 
 /// `json` is the parsed file, or `Null` when it is absent or invalid.
 pub(super) fn parse_keymap(
@@ -613,22 +613,26 @@ pub(super) fn parse_keymap(
         if fields.get("context").is_some_and(|c| !c.is_string()) || fields.get("args").is_some_and(|a| !a.is_object()) {
             diags.error(&path, "context must be a string and args an object");
         }
-        match (fields.get("command"), fields.get("write")) {
-            (Some(_), Some(_)) | (None, None) => {
-                diags.error(&path, "a binding needs exactly one of command or write (null unbinds)")
-            }
-            (Some(Value::String(c)), None)
+        let targets: Vec<&str> =
+            ["command", "write", "action"].into_iter().filter(|t| fields.contains_key(*t)).collect();
+        if targets.len() != 1 {
+            diags.error(&path, "a binding needs exactly one of command, write or action (null unbinds)");
+            continue;
+        }
+        match (targets[0], &fields[targets[0]]) {
+            ("command", Value::String(c))
                 if !commands.contains_key(c)
                     && !BUILTINS.contains(&c.as_str())
                     && !SHELL_COMMANDS.contains(&c.as_str()) =>
             {
                 diags.error(&path, format!("no command named {c} (shell commands: {})", SHELL_COMMANDS.join(", ")))
             }
-            (None, Some(Value::String(w))) if !writers.contains_key(w) => {
+            ("write", Value::String(w)) if !writers.contains_key(w) => {
                 diags.error(&path, format!("no writer named {w}"))
             }
-            (Some(Value::String(_) | Value::Null), None) | (None, Some(Value::String(_) | Value::Null)) => {}
-            _ => diags.error(&path, "command and write must be a name or null"),
+            ("action", Value::String(a)) if a.is_empty() => diags.error(&path, "action must not be empty"),
+            (_, Value::String(_) | Value::Null) => {}
+            (target, _) => diags.error(&path, format!("{target} must be a name or null")),
         }
     }
     bindings

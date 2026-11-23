@@ -363,7 +363,7 @@ fn rule_and_keymap_validation() {
         ("rules/c.json", r#"{"id": "c", "when": {"schedule": "every minute"}, "into": "prs.upsert", "args": {"id": 1, "title": "x"}, "max_per_hour": 0}"#),
         ("rules/d.json", r#"{"id": "d", "when": {"view": "prs_fresh"}, "key": "{id}", "into": "prs.note", "args": {"id": "{id}", "title": "{title}"}, "colour": 1}"#),
         ("rules/e.json", r#"{"id": "a", "when": {"schedule": "0 * * * *"}, "into": "prs.upsert", "args": {"id": 1, "title": "{title}"}}"#),
-        ("keymap.json", r#"[{"key": "f", "command": "prs.nope"}, {"key": "g", "write": "prs.upsert", "command": "palette.open"}, {"key": "x", "write": null}, {"command": "core.snapshot"}, {"key": "k", "command": "keymap.context"}]"#),
+        ("keymap.json", r#"[{"key": "f", "command": "prs.nope"}, {"key": "g", "write": "prs.upsert", "command": "palette.open"}, {"key": "x", "write": null}, {"command": "core.snapshot"}, {"key": "k", "command": "keymap.context"}, {"key": "cmd-enter", "context": "card:Transcript && editing", "action": "send"}, {"key": "j", "action": 3}]"#),
     ]);
     let h = home(&files);
     let e = errors(h.path());
@@ -379,12 +379,13 @@ fn rule_and_keymap_validation() {
         "rules/e.json: error: rule id a is already used by another rule",
         "rules/e.json: error: {title} needs when.view to take values from",
         "keymap.json[0]: error: no command named prs.nope",
-        "keymap.json[1]: error: a binding needs exactly one of command or write",
+        "keymap.json[1]: error: a binding needs exactly one of command, write or action",
+        "keymap.json[6]: error: action must be a name or null",
         "keymap.json[3]: error: key is required",
     ] {
         assert!(e.contains(expected), "missing {expected:?} in\n{e}");
     }
-    assert!(!e.contains("keymap.json[2]") && !e.contains("keymap.json[4]"), "{e}");
+    assert!(!e.contains("keymap.json[2]") && !e.contains("keymap.json[4]") && !e.contains("keymap.json[5]"), "{e}");
     let d = load(h.path(), Mode::Check).unwrap_err();
     assert!(d.iter().any(|d| d.level == Level::Warning
         && d.path == "rules/d.json"

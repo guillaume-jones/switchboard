@@ -118,7 +118,7 @@ Limits: past `max_depth` nested rule runs, or past `max_per_hour` runs started i
 `cards/<Name>.tsx` default-exports a React component. Imports allowed: `react`, `react/jsx-runtime`, `switchboard`, and relative paths into `cards/lib/` (tried as written, then `.ts`, `.tsx`, `.js`; no `index`). Cards never import each other; no npm packages, dynamic `import()` or `import.meta`. A dependency-free single-file ESM build of a library can be vendored into `cards/lib/` with its `.d.ts`, like `lib/marked.js`. Each card gets its own instance of its helpers. Render agent or remote text with `renderMarkdown` from `lib/markdown`, never as raw HTML: card HTML runs in the webview, which can start commands.
 
 ```ts
-import { useQuery, mutate, run, pty, useExpose, useCards, useConnection, CardSlot, Item, type CardProps } from "switchboard"
+import { useQuery, mutate, run, pty, useExpose, useActions, Region, useCards, useConnection, CardSlot, Item, type CardProps } from "switchboard"
 
 useQuery("prs_items", { id })        // live rows; undefined until loaded; throws on error
 useQuery("prs.search", { text })     // query
@@ -126,6 +126,8 @@ mutate("prs.dismiss", { ref })       // resolves to changed row count
 run("prs.fix-ci", { pr })            // resolves to run id
 pty(runId, { data, close, open })   // attach to a `pty` run: { write, resize, close }
 useExpose({ selected: "prs:4812" })  // context variables for key bindings
+useActions({ send })                // card actions for key bindings and the palette
+<Region name="composer" actions={{ send }}>…</Region>  // region:composer while focused
 useCards()                           // names of every card, e.g. for a picker
 useConnection()                      // { state: "online" | "reconnecting" | "offline", asOf } on another device
 <CardSlot component="PRList" props={{}} size="compact" id="prs" />
@@ -158,7 +160,7 @@ The same cards run on a phone, served by the desktop (see `remote`). `Root` sets
 { "key": "ctrl-tab", "context": "card:Boards", "write": "ui.next_board", "args": { "client": "{client}" } }
 ```
 
-`key` is a key with optional `ctrl-`/`alt-`/`shift-`/`cmd-` modifiers, or the mouse buttons `mouse-back` and `mouse-forward`. Exactly one of `command` (source, built-in, or shell: `palette.open`, `card.focus_next`, `card.focus_prev`, `keymap.context`) or `write`; `null` unbinds. Context: `card:<Name>`, variable names, `&&`, `||`, `!`, `>` (descendant), parentheses. Innermost match wins. `{var}` is the nearest card's, `{Card.var}` explicit; a missing variable disables the binding. `keymap.context` (cmd-shift-k) shows the stack and which binding a key hits.
+`key` is a key with optional `ctrl-`/`alt-`/`shift-`/`cmd-` modifiers, or the mouse buttons `mouse-back` and `mouse-forward`. Exactly one of `command` (source, built-in, or shell: `palette.open`, `card.focus_next`, `card.focus_prev`, `keymap.context`), `write`, or `action` (a card's `useActions` handler, the nearest card's or `Card.name`, called with `args` and the event); `null` unbinds. Context: `card:<Name>`, `region:<name>` (a `<Region name actions>` of a card, in the stack while focus is inside it), variable names, `&&`, `||`, `!`, `>` (descendant), parentheses. Reserved variables: `size` and `focused` (the innermost card). Innermost match wins. `{var}` is the nearest card's, `{Card.var}` explicit; a missing variable or unregistered action disables the binding. In a text field, keys without cmd, ctrl or alt reach only bindings whose context names a region. Card shortcuts are actions bound in `keymap.json`, never `keydown` handlers; keys internal to one widget (arrows in a list, Escape to cancel an edit) stay in the card. `keymap.context` (cmd-shift-k) shows the stack and which binding a key hits.
 
 ## Built-ins
 

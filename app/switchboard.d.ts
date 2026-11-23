@@ -31,6 +31,23 @@ declare module 'switchboard' {
   export function useCards(): string[]
   /** Sets this card's context variables, read by key bindings (`{selected}`). null or undefined means missing. */
   export function useExpose(vars: Record<string, unknown>): void
+  /**
+   * Registers this card's actions, which key bindings call by name (`"action": "send"`, or `"Card.send"`) and the palette
+   * lists. Each gets the binding's args and the key or mouse event that fired it (none from the palette). Leave an
+   * action out to disable its bindings, like a variable that is missing.
+   */
+  export function useActions(actions: Record<string, (args: Params, event?: KeyboardEvent | MouseEvent) => void>): void
+  /**
+   * Wraps part of a card, like a message box, that joins the context stack as `region:<name>` while focus is inside it,
+   * with its own variables and actions (`useActions` inside it registers there too). In a text field, keys without
+   * cmd, ctrl or alt reach only bindings whose context names a region.
+   */
+  export function Region(props: {
+    name: string
+    vars?: Record<string, unknown>
+    actions?: Record<string, (args: Params, event?: KeyboardEvent | MouseEvent) => void>
+    children: ReactNode
+  }): ReactElement
   /** The only way to render another card. `id` keys per-slot state such as grid geometry; the card receives it as `slot`. */
   export function CardSlot(props: { component: string; props?: Params; size?: Size; id?: string }): ReactNode
   /** Renders a ref (`prs:4812`) with its source's item_card (which receives `ref` and `size`), else the raw ref. */

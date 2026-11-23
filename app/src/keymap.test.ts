@@ -1,6 +1,16 @@
 import { expect, test } from 'vitest'
 import type { Binding, Size } from './bridge'
-import { eventKey, groupBindings, matchBindings, normalizeKey, parse, variable, type Frame } from './keymap'
+import {
+  cardAction,
+  eventKey,
+  groupBindings,
+  matchBindings,
+  normalizeKey,
+  parse,
+  namesRegion,
+  variable,
+  type Frame,
+} from './keymap'
 
 const frame = (card: string, vars: Record<string, unknown> = {}, size: Size = 'full'): Frame => ({ card, size, vars })
 const stack = [
@@ -85,6 +95,40 @@ test('missing variable disables the binding; null unbinds; later wins at equal d
   expect(win('u', stack.slice(0, 3))!.binding.write).toBe('ui.u')
   expect(win('h')!.binding.command).toBe('second')
   expect(win('z')).toBeUndefined()
+})
+
+test('actions: nearest registered wins, explicit form, unregistered is missing', () => {
+  const calls: string[] = []
+  const handler = (name: string) => () => void calls.push(name)
+  const frames: Frame[] = [
+    { ...frame('Boards'), actions: { find: handler('boards.find') } },
+    { ...frame('Transcript'), actions: { find: handler('transcript.find'), send: handler('send') } },
+    frame('Terminal'),
+  ]
+  cardAction(frames, 2, 'find')?.({})
+  cardAction(frames, 2, 'Boards.find')?.({})
+  expect(calls).toEqual(['transcript.find', 'boards.find'])
+  expect(cardAction(frames, 0, 'send')).toBeUndefined()
+  const bindings: Binding[] = [
+    { key: 'cmd-enter', context: 'card:Transcript', action: 'save' },
+    { key: 'cmd-enter', context: 'card:Transcript', action: 'send' },
+  ]
+  const hits = matchBindings(bindings, frames)
+  expect(hits.map(h => h.missing)).toEqual([[], ['save']])
+  expect(hits.find(h => !h.missing.length)?.handler).toBe(frames[1].actions!.send)
+})
+
+test('regions: matched by region:, skipped by card: and focused, and let a binding take typed keys', () => {
+  const frames: Frame[] = [frame('Transcript'), { ...frame('composer', { draft: 'x' }), region: true }]
+  expect(parse('card:Transcript > region:composer')(frames, 1)).toBe(true)
+  expect(parse('card:composer')(frames, 1)).toBe(false)
+  expect(parse('region:Transcript')(frames, 0)).toBe(false)
+  expect(variable(frames, 0, 'focused')).toBe(true)
+  expect(variable(frames, 1, 'focused')).toBe(false)
+  expect(variable(frames, 1, 'draft')).toBe('x')
+  expect(namesRegion({ key: 'enter', context: 'card:Transcript > region:composer' })).toBe(true)
+  expect(namesRegion({ key: 'enter', context: 'card:Transcript && focused' })).toBe(false)
+  expect(namesRegion({ key: 'enter' })).toBe(false)
 })
 
 test('key names', () => {

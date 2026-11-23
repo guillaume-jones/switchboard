@@ -25,7 +25,7 @@ A personal Tauri + React app for directing attention across Slack, Jira, PRs, mo
 
 ```
 settings.json            app-wide defaults and preferences
-keymap.json              key → command or writer
+keymap.json              key → command, writer or card action
 rules/*.json             rules that belong to no single source
 cards/*.tsx, cards/lib/  card components (Root.tsx is the entry point) and their helpers
 sources/<name>/
@@ -202,7 +202,7 @@ The shell renders one root card. All layout is cards rendering cards.
 - **Shell owns:** `<CardSlot>`, the palette (cmd-shift-p: shell commands, commands and writers), keymap and context stack, focus, and an error boundary whose root instance offers "revert last commit".
 - **`<CardSlot component props size id>`** is the only way cards compose. Each slot has its own error boundary and context frame. Nesting is capped at `depth_cap`.
 - **`<Item ref>`** renders a ref with its source's `item_card`, or as text.
-- **Card API** (`switchboard` module, provided at runtime like React): `useQuery` on a view (with equality filters) or a query, `mutate`, `run`, `useExpose`, `useCards` (card names from the config), `useConnection` (`online`, `reconnecting` or `offline` with the last contact's time; always `online` on the desktop). Identical subscriptions are shared. The app writes `cards/switchboard.d.ts` on start.
+- **Card API** (`switchboard` module, provided at runtime like React): `useQuery` on a view (with equality filters) or a query, `mutate`, `run`, `useExpose`, `useActions`, `Region`, `useCards` (card names from the config), `useConnection` (`online`, `reconnecting` or `offline` with the last contact's time; always `online` on the desktop). Identical subscriptions are shared. The app writes `cards/switchboard.d.ts` on start.
 - Cards are fetched over IPC as compiled module bundles and evaluated in the webview; each card gets its own instance of the helpers it imports.
 - **State:** navigation and layout are data in the view-less `ui` source; other per-slot state is in local storage keyed by the slot id.
 - **Undo:** `git revert` for the folder, `core.restore` for data.
@@ -221,8 +221,9 @@ With `remote` set when the app starts, the wrapper runs `tailscale up` if Tailsc
 
 ## Keymap
 
-- The context stack is the chain of focused card frames, e.g. `card:Root > card:Boards > card:Grid > card:PRList`. `size` and `focused` are reserved variables; others come from `useExpose`.
-- Bindings target a command or a writer, with predicates `&&`, `||`, `!`, `>` and parentheses. The innermost match wins, `null` unbinds, a missing variable disables the binding (greyed in the palette), and variables are read at keypress.
+- The context stack is the chain of focused card frames, e.g. `card:Root > card:Boards > card:Grid > card:PRList`. A `Region` of a card joins the stack as `region:<name>` while focus is inside it. `size` and `focused` (the innermost card) are reserved variables; others come from `useExpose`, and actions from `useActions` or a region's `actions`.
+- Bindings target a command, a writer or a card action (resolved like a variable, from the matched frame outwards), with predicates `&&`, `||`, `!`, `>` and parentheses. The innermost match wins, `null` unbinds, a missing variable disables the binding (greyed in the palette), and variables are read at keypress.
+- In a text field, keys without cmd, ctrl or alt reach only bindings whose context names a region, so typing never fires a binding by accident.
 - `keymap.context` shows the active stack and which binding a key hits.
 
 ## Default template

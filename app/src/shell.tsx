@@ -10,7 +10,20 @@ import { CardSlot, mutate, run } from './switchboard'
 import { isRemote, type Binding, type Config, type Params } from './bridge'
 import { useConfig } from './config'
 import { activeStack, focusStep, type SlotFrame } from './focus'
-import { bindingAction, eventKey, groupBindings, matchBindings, normalizeKey, type Action, type Hit } from './keymap'
+import {
+  bindingAction,
+  eventKey,
+  groupBindings,
+  isEditable,
+  matchBindings,
+  normalizeKey,
+  namesRegion,
+  type Action,
+  type ActionHandler,
+  type Frame,
+  type Hit,
+  variable,
+} from './keymap'
 import { cancel, enableNotifications, useRemoteStatus } from './remote'
 
 const SHELL_COMMANDS = ['palette.open', 'keymap.context', 'card.focus_next', 'card.focus_prev'] as const
@@ -22,9 +35,10 @@ const NOTICE_MS = 5000
 const ARROW_STEPS: Partial<Record<string, 1 | -1>> = { ArrowDown: 1, ArrowUp: -1 }
 const MODIFIER_KEYS = new Set(['Meta', 'Control', 'Alt', 'Shift'])
 
-type Execute = (action: Action, args: Params) => void
+type Execute = (action: Action, args: Params, handler?: ActionHandler, event?: KeyboardEvent | MouseEvent) => void
 type Overlay = { kind: 'palette' | 'context'; stack: SlotFrame[] }
 
+const frameName = (frame: Frame) => `${frame.region ? 'region' : 'card'}:${frame.card}`
 const firesFirst = (hits: Hit[]) => hits.find(hit => !hit.missing.length)
 const actionId = ({ kind, name }: Action) => `${kind}:${name}`
 
@@ -41,7 +55,7 @@ function LoadedShell({ config }: { config: Config }) {
   const bindingsByKey = useMemo(() => groupBindings(bindings, b => normalizeKey(b.key)), [bindings])
   const close = useCallback(() => setOverlay(null), [])
 
-  const execute = useCallback<Execute>(({ kind, name }, args) => {
+  const execute = useCallback<Execute>(({ kind, name }, args, handler, event) => {
     const showError = (error: Error) => setNotice(error.message)
     const shellCommands: Record<ShellCommand, () => void> = {
       'palette.open': () => setOverlay({ kind: 'palette', stack: activeStack() }),
@@ -49,7 +63,13 @@ function LoadedShell({ config }: { config: Config }) {
       'card.focus_next': () => focusStep(1),
       'card.focus_prev': () => focusStep(-1),
     }
-    if (kind === 'write') mutate(name, args).catch(showError)
+    if (kind === 'action') {
+      try {
+        handler?.(args, event)
+      } catch (error) {
+        showError(error as Error)
+      }
+    } else if (kind === 'write') mutate(name, args).catch(showError)
     else if (isShellCommand(name)) shellCommands[name]()
     else run(name, args).catch(showError)
   }, [])
@@ -64,15 +84,14 @@ function LoadedShell({ config }: { config: Config }) {
     if (overlay) return
     const onInput = (e: KeyboardEvent | MouseEvent) => {
       if (e.defaultPrevented) return
-      const editing =
-        e.target instanceof HTMLElement && (e.target.isContentEditable || e.target.closest('input, textarea, select'))
-      if (e instanceof KeyboardEvent && editing && !e.metaKey && !e.ctrlKey) return
-      const candidates = bindingsByKey.get(eventKey(e))
+      // Keys that type into a text field reach only bindings whose context names a region.
+      const types = e instanceof KeyboardEvent && isEditable(e.target) && !e.metaKey && !e.ctrlKey && !e.altKey
+      const candidates = bindingsByKey.get(eventKey(e))?.filter(b => !types || namesRegion(b))
       const hit = candidates && firesFirst(matchBindings(candidates, activeStack()))
       if (!hit) return
       e.preventDefault()
       const action = bindingAction(hit.binding)
-      if (action) execute(action, hit.args)
+      if (action) execute(action, hit.args, hit.handler, e)
     }
     window.addEventListener('keydown', onInput)
     window.addEventListener('mouseup', onInput)
@@ -162,9 +181,18 @@ function Overlay({ close, children }: { close(): void; children: ReactNode }) {
   )
 }
 
-type PaletteEntry = Action & { key?: string; args: Params; disabled: boolean; lowercaseName: string }
+type PaletteEntry = Action & {
+  key?: string
+  args: Params
+  handler?: ActionHandler
+  disabled: boolean
+  lowercaseName: string
+}
 
-/** Every command and writer. Shows the innermost binding's key; disabled when every binding is missing a variable. */
+/**
+ * Every command and writer, and the actions of the cards in the stack (`Card.name`, innermost first). Shows the
+ * innermost binding's key; disabled when every binding is missing a variable.
+ */
 function Palette({
   config,
   bindings,
@@ -186,11 +214,30 @@ function Palette({
       const action = bindingAction(b)
       return action && actionId(action)
     })
+    const cardActions = new Map<string, ActionHandler>()
+    for (const frame of stack.toReversed())
+      for (const [name, handler] of Object.entries(frame.actions ?? {}))
+        if (![...cardActions.keys()].some(shown => shown.endsWith(`.${name}`)))
+          cardActions.set(`${frame.card}.${name}`, handler)
+    const actionEntries = [...cardActions].map(([name, handler]): PaletteEntry => {
+      const bare = name.slice(name.indexOf('.') + 1)
+      const candidates = [name, bare].flatMap(n => bindingsByAction.get(actionId({ kind: 'action', name: n })) ?? [])
+      const hit = matchBindings(candidates, stack).find(h => h.handler === handler)
+      return {
+        kind: 'action',
+        name,
+        key: hit?.binding.key,
+        args: hit?.args ?? {},
+        handler,
+        disabled: false,
+        lowercaseName: name.toLowerCase(),
+      }
+    })
     const actions: Action[] = [
       ...[...SHELL_COMMANDS, ...config.commands].map(name => ({ kind: 'command' as const, name })),
       ...config.writers.map(name => ({ kind: 'write' as const, name })),
     ]
-    return actions.map((action): PaletteEntry => {
+    const entries = actions.map((action): PaletteEntry => {
       const hits = matchBindings(bindingsByAction.get(actionId(action)) ?? [], stack)
       const runnable = firesFirst(hits)
       return {
@@ -201,6 +248,7 @@ function Palette({
         lowercaseName: action.name.toLowerCase(),
       }
     })
+    return [...actionEntries, ...entries]
   }, [config, bindings, stack])
 
   const shown = useMemo(() => {
@@ -211,7 +259,7 @@ function Palette({
   const choose = (entry: PaletteEntry | undefined) => {
     if (!entry || entry.disabled) return
     close()
-    execute(entry, entry.args)
+    execute(entry, entry.args, entry.handler)
   }
 
   const onKeyDown = (e: ReactKeyboardEvent) => {
@@ -228,7 +276,7 @@ function Palette({
       <input
         autoFocus
         value={query}
-        placeholder="Command or writer"
+        placeholder="Action, command or writer"
         onKeyDown={onKeyDown}
         onChange={e => {
           setQuery(e.target.value)
@@ -277,10 +325,12 @@ function KeyContext({
 
   return (
     <Overlay close={close}>
-      <div>{stack.map(frame => `card:${frame.card}`).join(' > ') || 'No focused card'}</div>
+      <div>{stack.map(frameName).join(' > ') || 'No focused card'}</div>
       {stack.map((frame, i) => (
         <div key={i} className="muted" style={{ paddingLeft: i * 12 }}>
-          card:{frame.card} {JSON.stringify({ size: frame.size, focused: i === stack.length - 1, ...frame.vars })}
+          {frameName(frame)}{' '}
+          {JSON.stringify({ size: frame.size, focused: variable(stack, i, 'focused'), ...frame.vars })}
+          {Object.keys(frame.actions ?? {}).length > 0 && ` actions: ${Object.keys(frame.actions!).join(', ')}`}
         </div>
       ))}
       <p>{key ? `${key}${hits.length ? '' : ': no binding'}` : 'Press a key (Esc closes)'}</p>
@@ -288,7 +338,7 @@ function KeyContext({
         const action = bindingAction(hit.binding)
         return (
           <div key={i} className={`row${hit === winner ? ' sel' : hit.missing.length ? ' off' : ''}`}>
-            <span>{hit.depth < 0 ? 'global' : `at card:${stack[hit.depth].card}`}</span>
+            <span>{hit.depth < 0 ? 'global' : `at ${frameName(stack[hit.depth])}`}</span>
             <span>{hit.binding.context}</span>
             <span>{!action ? 'unbound' : action.kind === 'write' ? `write ${action.name}` : action.name}</span>
             <span className="muted">

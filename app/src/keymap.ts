@@ -225,7 +225,7 @@ const MOUSE_BUTTONS: Partial<Record<number, string>> = { 3: 'mouse-back', 4: 'mo
  */
 export function eventKey(e: KeyboardEvent | MouseEvent): string {
   const letterOrDigit = 'code' in e ? /^(?:Key|Digit)(.)$/.exec(e.code)?.[1].toLowerCase() : undefined
-  const base = 'key' in e ? (letterOrDigit ?? (e.key === ' ' ? 'space' : e.key.toLowerCase())) : MOUSE_BUTTONS[e.button]
+  const base = 'key' in e ? (letterOrDigit ?? (e.code === 'Space' ? 'space' : e.key.toLowerCase())) : MOUSE_BUTTONS[e.button]
   if (!base) return ''
   const held: Record<Modifier, boolean> = {
     ctrl: e.ctrlKey,

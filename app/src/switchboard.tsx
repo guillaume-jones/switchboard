@@ -37,6 +37,8 @@ export const run = (name: string, args: Params = {}) => bridge.run(name, args).t
 
 export const pty = bridge.pty
 
+export const microphone = bridge.microphone
+
 export const useCards = () => useLoadedConfig().cards
 
 export function useConnection() {

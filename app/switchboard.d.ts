@@ -23,6 +23,14 @@ declare module 'switchboard' {
     on: { open?: () => void; data: (bytes: Uint8Array) => void; close: (error?: Error) => void },
   ): { write: (text: string) => void; resize: (cols: number, rows: number) => void; close: () => void }
   /**
+   * The desktop's default microphone, captured natively so it starts at once; undefined on other devices. `data` gets
+   * 16 kHz mono samples about every 0.1 s. After `stop`, it gets what is left, then `close` is called once, with an
+   * error if the microphone never opened.
+   */
+  export const microphone:
+    | ((on: { data: (samples: Int16Array) => void; close: (error?: Error) => void }) => { stop: () => void })
+    | undefined
+  /**
    * The desktop's reachability from another device; always `online` on the desktop. Reconnecting and offline, the board
    * shows the last data seen, as of `asOf` (ms since epoch), and queues writes and runs.
    */

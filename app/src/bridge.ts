@@ -116,6 +116,34 @@ const inWindow = '__TAURI_INTERNALS__' in globalThis
 /** Another device served by the desktop over Tailscale, rather than the Tauri window or the mock in `vite` dev. */
 export const isRemote = !inWindow && !import.meta.env.DEV
 
+export type MicrophoneHandlers = {
+  data: (samples: Int16Array) => void
+  /** Once, after the last samples; with an error if it never opened. */
+  close: (error?: Error) => void
+}
+/** The desktop's microphone, captured natively; only in the window. */
+export const microphone = inWindow
+  ? (on: MicrophoneHandlers) => {
+      let id: number | undefined
+      let stopped = false
+      const output = new Channel<ArrayBuffer>()
+      output.onmessage = buffer => (buffer.byteLength ? on.data(new Int16Array(buffer)) : on.close())
+      invoke<number>('mic_open', { output }).then(
+        opened => {
+          id = opened
+          if (stopped) void invoke('mic_close', { id })
+        },
+        thrown => on.close(toError(thrown)),
+      )
+      return {
+        stop: () => {
+          stopped = true
+          if (id !== undefined) void invoke('mic_close', { id })
+        },
+      }
+    }
+  : undefined
+
 async function connect(): Promise<Backend> {
   if (inWindow) return tauri
   if (import.meta.env.DEV) return (await import('./mock')).default

@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::Path;
-use switchboard_core::{Diagnostic, Level, Loaded, Mode, load};
+use switchboard_core::{Diagnostic, Level, Loaded, Mode, load, reload};
 
 fn write(home: &Path, files: &[(&str, &str)]) {
     for (path, text) in files {
@@ -303,14 +303,23 @@ fn unused_items_warn() {
     files.extend([
         ("sources/prs/views/stale.sql", "SELECT id FROM prs.items"),
         ("sources/prs/views/used.sql", "SELECT id FROM prs.items"),
-        ("cards/Root.tsx", "useQuery(\"prs_used\", {}); useQuery(\"prs_items\", {}); mutate('prs.upsert', {})"),
+        ("sources/prs/queries/find.sql", "SELECT id FROM prs.items WHERE id = :id"),
+        ("sources/prs/queries/lost.sql", "SELECT id FROM prs.items WHERE id = :id"),
+        (
+            "cards/Root.tsx",
+            "useQuery(\"prs_used\", {}); useQuery(\"prs_items\", {}); mutate('prs.upsert', {}); prs_stale_old; prs.lost_old",
+        ),
+        ("cards/lib/find.ts", "useQuery(`prs.find`, {})"),
     ]);
     let h = home(&files);
     let l = ok(h.path(), Mode::Check);
     let warnings: Vec<String> = l.warnings.iter().map(|w| w.to_string()).collect();
     assert_eq!(
         warnings,
-        ["sources/prs/views/stale.sql: warning: prs_stale is not used by any view, card, command, rule or key binding"]
+        [
+            "sources/prs/views/stale.sql: warning: prs_stale is not used by any view, card, command, rule or key binding",
+            "sources/prs/queries/lost.sql: warning: prs.lost is not used by any view, card, command, rule or key binding"
+        ]
     );
 }
 
@@ -438,15 +447,45 @@ fn cards_compile_with_lib_helpers() {
         ("cards/Other.tsx", "export default function Other() { return null }\n"),
     ]);
     let l = ok(h.path(), Mode::Check);
-    let root = &l.cards["Root"];
-    assert_eq!(root.keys().collect::<Vec<_>>(), ["Root.tsx", "lib/bold.tsx", "lib/deep/prefix.js", "lib/label.ts"]);
-    assert!(root["Root.tsx"].contains("__vite_ssr_import__(\"lib/label.ts\""), "{}", root["Root.tsx"]);
-    assert!(root["Root.tsx"].contains("__vite_ssr_import__(\"react/jsx-runtime\""));
+    let code = |card: &str, module: &str| &*l.card_code[&l.cards[card][module]];
+    assert_eq!(
+        l.cards["Root"].keys().collect::<Vec<_>>(),
+        ["Root.tsx", "lib/bold.tsx", "lib/deep/prefix.js", "lib/label.ts"]
+    );
+    assert!(code("Root", "Root.tsx").contains("__vite_ssr_import__(`lib/label.ts`"), "{}", code("Root", "Root.tsx"));
+    assert!(code("Root", "Root.tsx").contains("__vite_ssr_import__(`react/jsx-runtime`"));
     assert!(
-        root["lib/label.ts"].contains("__vite_ssr_import__(\"lib/deep/prefix.js\"")
-            && !root["lib/label.ts"].contains(": string")
+        code("Root", "lib/label.ts").contains("__vite_ssr_import__(`lib/deep/prefix.js`")
+            && !code("Root", "lib/label.ts").contains(": string")
     );
     assert_eq!(l.cards["Other"].keys().collect::<Vec<_>>(), ["Other.tsx"]);
+}
+
+#[test]
+fn cards_share_the_code_of_lib_modules() {
+    let h = home(&[
+        ("cards/A.tsx", "import { big } from \"./lib/big\"\nexport default function A() {\n  return big\n}\n"),
+        ("cards/B.tsx", "import { big } from \"./lib/big\"\nexport default function B() {\n  return big\n}\n"),
+        ("cards/lib/big.ts", "export const big = \"big\"\n"),
+    ]);
+    let l = ok(h.path(), Mode::Check);
+    assert_eq!(l.cards["A"]["lib/big.ts"], l.cards["B"]["lib/big.ts"]);
+    assert_eq!(l.card_code.len(), 3);
+    assert!(!l.card_code[&l.cards["A"]["A.tsx"]].contains('\n'), "minified");
+}
+
+#[test]
+fn unchanged_card_modules_follow_changes_to_what_their_imports_resolve_to() {
+    let h = home(&[("cards/Root.tsx", "import { a } from \"./lib/a\"\nexport default () => a\n")]);
+    let l = load(h.path(), Mode::Apply).unwrap();
+    assert_eq!(l.cards["Root"].keys().collect::<Vec<_>>(), ["Root.tsx"]);
+    write(h.path(), &[("cards/lib/a.tsx", "export const a = \"tsx\"\n")]);
+    let l = reload(h.path(), Mode::Apply, &l).unwrap();
+    assert_eq!(l.cards["Root"].keys().collect::<Vec<_>>(), ["Root.tsx", "lib/a.tsx"]);
+    write(h.path(), &[("cards/lib/a.ts", "export const a = \"ts\"\n")]);
+    let l = reload(h.path(), Mode::Apply, &l).unwrap();
+    assert_eq!(l.cards["Root"].keys().collect::<Vec<_>>(), ["Root.tsx", "lib/a.ts"]);
+    assert!(l.card_code[&l.cards["Root"]["Root.tsx"]].contains("`lib/a.ts`"));
 }
 
 #[test]
@@ -469,8 +508,9 @@ fn applying_ships_a_broken_card_module_that_throws_its_errors() {
     ]);
     let l = load(h.path(), Mode::Apply).unwrap();
     assert!(l.warnings.iter().any(|w| w.to_string() == "cards/lib/bad.ts:1:17: warning: Unexpected token"));
-    assert_eq!(l.cards["Root"]["lib/bad.ts"], "throw new Error(\"cards/lib/bad.ts:1:17: Unexpected token\")");
-    assert!(l.cards["Other"]["Other.tsx"].contains("() => 1"));
+    let code = |card: &str, module: &str| &*l.card_code[&l.cards[card][module]];
+    assert_eq!(code("Root", "lib/bad.ts"), "throw new Error(\"cards/lib/bad.ts:1:17: Unexpected token\")");
+    assert!(code("Other", "Other.tsx").contains("()=>1"));
 }
 
 #[test]

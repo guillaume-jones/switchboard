@@ -7,8 +7,8 @@ mod socket;
 
 pub use engine::{Emitter, Engine, Origin};
 pub use loader::{
-    Action, BUILTINS, CardBundle, Diagnostic, FileWatch, Level, Loaded, Mode, Rule, SHELL_COMMANDS, Select, Settings,
-    Source, SourceConfig, Statement, SystemEvent, Trigger, Watch, Writer, load,
+    Action, BUILTINS, CardBundle, CardCode, Diagnostic, FileWatch, Level, Loaded, Mode, Rule, SHELL_COMMANDS, Select,
+    Settings, Source, SourceConfig, Statement, SystemEvent, Trigger, Watch, Writer, load, reload,
 };
 pub use maintenance::{Template, init};
 pub use pty::Pty;
@@ -17,6 +17,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 pub(crate) const DAY_MS: i64 = 86_400_000;
+
+/// A short hash of `text`, naming content that is unchanged while it is.
+pub fn digest(text: &str) -> String {
+    use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+    format!("{:016x}", BuildHasherDefault::<DefaultHasher>::default().hash_one(text))
+}
 
 /// The folder: `$SWITCHBOARD_HOME`, else `~/.switchboard`.
 pub fn home() -> PathBuf {

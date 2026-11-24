@@ -86,7 +86,12 @@ async function instantiate(name: string, modules: CardModules): Promise<CardComp
         Object.defineProperty(exports, key, { enumerable: true, get: () => source[key] })
       }
     }
-    const evaluate = new AsyncFunction('__vite_ssr_import__', '__vite_ssr_exports__', '__vite_ssr_exportAll__', code)
+    const evaluate = new AsyncFunction(
+      '__vite_ssr_import__',
+      '__vite_ssr_exports__',
+      '__vite_ssr_exportAll__',
+      `${code}\n//# sourceURL=cards/${id}`,
+    )
     await evaluate(importModule, exports, exportAll)
     return exports
   }

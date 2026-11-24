@@ -1,5 +1,6 @@
 //! Lexical scans of SQL text, for the checks that preparing a statement cannot express.
 
+use std::collections::HashSet;
 use std::ffi::CString;
 
 pub(super) fn is_word_char(c: char) -> bool {
@@ -42,6 +43,29 @@ pub(super) fn code_only(sql: &str) -> String {
 pub(super) fn mentions_word(text: &str, word: &str) -> bool {
     text.match_indices(word)
         .any(|(i, _)| !text[..i].ends_with(is_word_char) && !text[i + word.len()..].starts_with(is_word_char))
+}
+
+/// Every run of identifier characters in `text`, and every two of them joined by a dot (`prs.search`): what
+/// [`mentions_word`] finds of a view or query name, for many names in one pass over a large text.
+pub(super) fn add_words<'a>(text: &'a str, words: &mut HashSet<&'a str>) {
+    let bytes = text.as_bytes();
+    let is_word = |i: usize| bytes.get(i).is_some_and(|&b| is_word_char(b as char));
+    let (mut i, mut previous) = (0, None);
+    while i < bytes.len() {
+        if !is_word(i) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while is_word(i) {
+            i += 1;
+        }
+        words.insert(&text[start..i]);
+        if let Some(joined) = previous.filter(|&(_, end)| end + 1 == start && bytes[end] == b'.') {
+            words.insert(&text[joined.0..i]);
+        }
+        previous = Some((start, i));
+    }
 }
 
 /// Whether the SQL reads the current time: `'now'`, `CURRENT_*`, or a date function called without a time value.

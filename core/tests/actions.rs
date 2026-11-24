@@ -450,7 +450,7 @@ fn cards_are_served_and_recompiles_are_announced() {
         ("cards/lib/label.ts", "export const label = \"one\"\n"),
     ]);
     let (engine, rx) = open(h.path());
-    assert!(engine.card("Root").unwrap()["lib/label.ts"].as_str().unwrap().contains("\"one\""));
+    assert!(engine.card("Root").unwrap()["lib/label.ts"].as_str().unwrap().contains("`one`"));
     assert!(engine.card("Nope").is_err());
     write(h.path(), &[("cards/switchboard.d.ts", "declare module \"switchboard\" {}\n")]);
     std::thread::sleep(Duration::from_millis(400));
@@ -470,9 +470,9 @@ fn cards_are_served_and_recompiles_are_announced() {
         cards
     };
     assert_eq!(changed("cards/lib/label.ts", "export const label = \"two\"\n"), ["Root"]);
-    assert!(engine.card("Root").unwrap()["lib/label.ts"].as_str().unwrap().contains("\"two\""));
+    assert!(engine.card("Root").unwrap()["lib/label.ts"].as_str().unwrap().contains("`two`"));
     assert_eq!(changed("cards/Plain.tsx", "export default function Plain() { return <div>three</div> }\n"), ["Plain"]);
-    assert!(engine.card("Plain").unwrap()["Plain.tsx"].as_str().unwrap().contains("\"three\""));
+    assert!(engine.card("Plain").unwrap()["Plain.tsx"].as_str().unwrap().contains("three"));
 }
 
 fn now_ms() -> i64 {

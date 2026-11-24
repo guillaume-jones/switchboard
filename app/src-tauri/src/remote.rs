@@ -13,15 +13,14 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde_json::{Map, Value, json};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
-use std::hash::{BuildHasher, BuildHasherDefault};
 use std::io::Write;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tower_http::compression::CompressionLayer;
 
 /// One open stream: a phone's app or a browser tab. Its subscriptions end with it.
 pub(crate) struct Client {
@@ -89,7 +88,7 @@ const LOG_LIMIT: u64 = 1 << 20;
 const PRESENCE_TTL: Duration = Duration::from_secs(25);
 
 fn digest(value: &Value) -> String {
-    format!("{:016x}", BuildHasherDefault::<DefaultHasher>::default().hash_one(value.to_string()))
+    switchboard_core::digest(&value.to_string())
 }
 
 /// Drops a client and its subscriptions.
@@ -101,8 +100,9 @@ fn close(state: &App, id: &str) {
     }
 }
 
-/// What a device's cache lacks: the config and cards whose digest differs from the `manifest`'s, and its
-/// subscriptions, opened for this client, with their rows unless they match. Closes the device's `previous` client.
+/// What a device's cache lacks: the config and cards whose digest differs from the `manifest`'s, the code of the
+/// cards' modules whose hash it does not list, and its subscriptions, opened for this client, with their rows unless
+/// they match. Closes the device's `previous` client.
 fn resync(state: &App, client: &Client, manifest: Value) -> Reply {
     if let Some(previous) = manifest["previous"].as_str() {
         close(state, previous);
@@ -110,12 +110,14 @@ fn resync(state: &App, client: &Client, manifest: Value) -> Reply {
     with(state, |e| {
         let config = e.config();
         let config_hash = digest(&config);
+        let have: HashSet<&str> =
+            manifest["modules"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        let mut delivery = e.cards(&have);
         let mut cards = Map::new();
-        for name in config["cards"].as_array().into_iter().flatten().filter_map(Value::as_str) {
-            let modules = e.card(name)?;
-            let hash = digest(&modules);
+        for (name, modules) in delivery["cards"].as_object().into_iter().flatten() {
+            let hash = digest(modules);
             if manifest["cards"][name] != hash {
-                cards.insert(name.into(), json!({ "hash": hash, "modules": modules }));
+                cards.insert(name.clone(), json!({ "hash": hash, "modules": modules }));
             }
         }
         let subs: Vec<Value> = manifest["subs"]
@@ -140,6 +142,7 @@ fn resync(state: &App, client: &Client, manifest: Value) -> Reply {
             "config": if changed { config } else { Value::Null },
             "config_hash": config_hash,
             "cards": cards,
+            "code": delivery["code"].take(),
             "subs": subs,
         }))
     })
@@ -215,6 +218,7 @@ async fn serve(app: AppHandle, port: u16) -> Result<(), String> {
         .route("/api/pty/{run}", get(pty))
         .route("/api/{command}", post(call))
         .fallback(get(asset))
+        .layer(CompressionLayer::new())
         .layer(middleware::from_fn_with_state(tailnet, authorize))
         .with_state(app);
     axum::serve(listener, router).await.map_err(|e| e.to_string())

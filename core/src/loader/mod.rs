@@ -8,13 +8,13 @@ mod schema;
 mod sql_files;
 mod sql_text;
 
-pub use cards::CardBundle;
+pub use cards::{CardBundle, CardCode};
 pub use config::{Action, FileWatch, Rule, Settings, SourceConfig, SystemEvent, Trigger, Watch};
 
 use config::RuleContext;
 use include_dir::{Dir, include_dir};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -98,6 +98,9 @@ pub struct Loaded {
     /// Command name → executable.
     pub commands: BTreeMap<String, PathBuf>,
     pub cards: BTreeMap<String, CardBundle>,
+    /// The code of every card's modules.
+    pub card_code: CardCode,
+    compilations: cards::Compilations,
     pub rules: BTreeMap<String, Rule>,
     pub keymap: Vec<Value>,
     pub settings: Settings,
@@ -214,14 +217,24 @@ enum Scope {
 }
 
 pub fn load(home: &Path, mode: Mode) -> Result<Loaded, Vec<Diagnostic>> {
-    load_scoped(home, mode, Scope::Folder)
+    load_scoped(home, mode, Scope::Folder, &cards::Compilations::new())
+}
+
+/// Like [`load`], reusing the card modules `previous` compiled whose text and imports are unchanged.
+pub fn reload(home: &Path, mode: Mode, previous: &Loaded) -> Result<Loaded, Vec<Diagnostic>> {
+    load_scoped(home, mode, Scope::Folder, &previous.compilations)
 }
 
 pub(crate) fn load_core_only(home: &Path, mode: Mode) -> Result<Loaded, Vec<Diagnostic>> {
-    load_scoped(home, mode, Scope::CoreOnly)
+    load_scoped(home, mode, Scope::CoreOnly, &cards::Compilations::new())
 }
 
-fn load_scoped(home: &Path, mode: Mode, scope: Scope) -> Result<Loaded, Vec<Diagnostic>> {
+fn load_scoped(
+    home: &Path,
+    mode: Mode,
+    scope: Scope,
+    previous: &cards::Compilations,
+) -> Result<Loaded, Vec<Diagnostic>> {
     let mut diags = Diagnostics::default();
     let data = home.join("data");
     let folder_file = |rel: &str| match scope {
@@ -249,7 +262,7 @@ fn load_scoped(home: &Path, mode: Mode, scope: Scope) -> Result<Loaded, Vec<Diag
         Scope::Folder => cards::read(home),
         Scope::CoreOnly => BTreeMap::new(),
     };
-    let cards = cards::bundle(&card_modules, mode, &mut diags);
+    let (cards, card_code, compilations) = cards::bundle(&card_modules, previous, mode, &mut diags);
     let card_names: BTreeSet<&str> = cards.keys().map(String::as_str).collect();
 
     let mut sources = BTreeMap::new();
@@ -302,10 +315,11 @@ fn load_scoped(home: &Path, mode: Mode, scope: Scope) -> Result<Loaded, Vec<Diag
         .chain(folder_rules.iter().map(|(_, text)| text.as_str()))
         .chain(keymap_text.as_deref())
         .collect();
+    let mut mentioned = HashSet::new();
+    mentioning_texts.iter().for_each(|text| sql_text::add_words(text, &mut mentioned));
     let unnested = views.iter().filter(|(name, _)| !nested_views.contains(*name));
     for (name, select) in unnested.chain(&queries) {
-        let used = mentioning_texts.iter().any(|text| sql_text::mentions_word(text, name));
-        if select.source != CORE_SOURCE && !used {
+        if select.source != CORE_SOURCE && !mentioned.contains(name.as_str()) {
             diags.warn(&select.path, format!("{name} is not used by any view, card, command, rule or key binding"));
         }
     }
@@ -332,6 +346,8 @@ fn load_scoped(home: &Path, mode: Mode, scope: Scope) -> Result<Loaded, Vec<Diag
         writers,
         commands,
         cards,
+        card_code,
+        compilations,
         rules,
         keymap,
         settings,

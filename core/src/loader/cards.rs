@@ -4,7 +4,7 @@ use super::sql_text::location;
 use super::{Diagnostics, Mode};
 use oxc::allocator::Allocator;
 use oxc::ast::{AstKind, ast};
-use oxc::codegen::Codegen;
+use oxc::codegen::{Codegen, CodegenOptions};
 use oxc::diagnostics::OxcDiagnostic;
 use oxc::parser::Parser;
 use oxc::semantic::SemanticBuilder;
@@ -13,9 +13,12 @@ use oxc::transformer::{TransformOptions, Transformer};
 use oxc::transformer_plugins::ModuleRunnerTransform;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::Arc;
 
-/// Module path relative to `cards/` (`Root.tsx`, `lib/format.ts`) → compiled JavaScript.
+/// A card's modules: path relative to `cards/` (`Root.tsx`, `lib/format.ts`) → the hash of its code in [`CardCode`].
 pub type CardBundle = BTreeMap<String, String>;
+/// Compiled JavaScript by its hash, held once however many cards import it.
+pub type CardCode = BTreeMap<String, Arc<str>>;
 
 const RUNTIME_MODULES: [&str; 3] = ["react", "react/jsx-runtime", "switchboard"];
 const LIB_EXTENSIONS: [&str; 3] = [".ts", ".tsx", ".js"];
@@ -45,111 +48,151 @@ pub(super) fn read(home: &Path) -> BTreeMap<String, String> {
     modules
 }
 
-/// Compiles every module and bundles each card with the lib modules it imports, directly or not. When applying, a
-/// module that fails to compile only warns, and is replaced by one throwing its errors when a card evaluates it.
+/// The compilation of each module, by path relative to `cards/`, which the next load reuses while the module's text
+/// and what its imports resolve to are unchanged.
+pub(super) type Compilations = BTreeMap<String, Arc<Compiled>>;
+
+/// Compiles every module not compiled the same in `previous` and bundles each card with the lib modules it imports,
+/// directly or not. When applying, a module that fails to compile only warns, and is replaced by one throwing its
+/// errors when a card evaluates it.
 pub(super) fn bundle(
     modules: &BTreeMap<String, String>,
+    previous: &Compilations,
     mode: Mode,
     diags: &mut Diagnostics,
-) -> BTreeMap<String, CardBundle> {
+) -> (BTreeMap<String, CardBundle>, CardCode, Compilations) {
     let names: BTreeSet<String> = modules.keys().cloned().collect();
-    let mut compiled = BTreeMap::new();
+    let mut compilations = Compilations::new();
     for (rel, text) in modules {
-        match compile(rel, text, &names) {
-            Ok(module) => _ = compiled.insert(rel.as_str(), module),
-            Err(errors) => {
-                let path = format!("cards/{rel}");
-                let errors: Vec<String> = errors
-                    .into_iter()
-                    .map(|(offset, message)| {
-                        let at = location(&path, text, offset);
-                        match mode {
-                            Mode::Check => diags.error(&at, &message),
-                            Mode::Apply => diags.warn(&at, &message),
-                        }
-                        format!("{at}: {message}")
-                    })
-                    .collect();
-                let js = format!("throw new Error({})", serde_json::to_string(&errors.join("\n")).unwrap());
-                compiled.insert(rel.as_str(), CompiledModule { js, imports: Vec::new() });
+        let importer_dir = rel.rsplit_once('/').map_or("", |(dir, _)| dir);
+        let text_hash = crate::digest(text);
+        let fresh = previous.get(rel).filter(|c| {
+            c.text_hash == text_hash
+                && c.resolved.iter().all(|(spec, r)| resolve_import(importer_dir, spec, &names) == *r)
+        });
+        let entry = fresh.cloned().unwrap_or_else(|| Arc::new(compile(rel, importer_dir, text, text_hash, &names)));
+        for (at, message) in &entry.errors {
+            match mode {
+                Mode::Check => diags.error(at, message),
+                Mode::Apply => diags.warn(at, message),
             }
         }
+        compilations.insert(rel.clone(), entry);
     }
     let mut cards = BTreeMap::new();
+    let mut code = CardCode::new();
     for card in names.iter().filter(|rel| !rel.contains('/')) {
         let mut bundle = CardBundle::new();
         let mut pending = vec![card.as_str()];
         while let Some(rel) = pending.pop() {
-            if let Some(module) = compiled.get(rel).filter(|_| !bundle.contains_key(rel)) {
-                bundle.insert(rel.to_string(), module.js.clone());
+            if let Some(module) = compilations.get(rel).map(|c| &c.module).filter(|_| !bundle.contains_key(rel)) {
+                bundle.insert(rel.to_string(), module.hash.clone());
+                code.entry(module.hash.clone()).or_insert_with(|| module.js.clone());
                 pending.extend(module.imports.iter().map(String::as_str));
             }
         }
         cards.insert(card.trim_end_matches(".tsx").to_string(), bundle);
     }
-    cards
+    (cards, code, compilations)
 }
 
+#[derive(Debug)]
+pub(super) struct Compiled {
+    text_hash: String,
+    /// Each import specifier and what it resolved to.
+    resolved: Vec<(String, Result<Import, String>)>,
+    /// The compiled module, or one throwing `errors`.
+    module: CompiledModule,
+    /// Each error's location and message.
+    errors: Vec<(String, String)>,
+}
+
+#[derive(Debug)]
 struct CompiledModule {
-    js: String,
+    js: Arc<str>,
+    hash: String,
     /// Lib modules imported, by path relative to `cards/`.
     imports: Vec<String>,
 }
 
-/// Errors are byte offsets into `text` with a message.
-fn compile(rel: &str, text: &str, modules: &BTreeSet<String>) -> Result<CompiledModule, Vec<(usize, String)>> {
-    let alloc = Allocator::default();
-    let mut parsed = Parser::new(&alloc, text, SourceType::from_path(rel).unwrap_or_default()).parse();
-    let located = |diagnostics: &[OxcDiagnostic]| -> Vec<(usize, String)> {
-        diagnostics
-            .iter()
-            .map(|e| (e.labels.first().map_or(0, |l| l.offset() as usize), e.message.to_string()))
-            .collect()
-    };
-    if !parsed.diagnostics.is_empty() {
-        return Err(located(&parsed.diagnostics));
+impl CompiledModule {
+    fn new(js: String, imports: Vec<String>) -> CompiledModule {
+        CompiledModule { hash: crate::digest(&js), js: js.into(), imports }
     }
-    let semantic = SemanticBuilder::new().with_check_syntax_error(true).with_build_nodes(true).build(&parsed.program);
-    let mut errors = located(&semantic.diagnostics);
-    errors.extend(semantic.semantic.nodes().iter().filter_map(|n| match n.kind() {
-        AstKind::ImportExpression(e) => {
-            Some((e.span.start as usize, "dynamic import() is not supported: use a static import".into()))
-        }
-        AstKind::ImportMeta(m) => Some((m.span.start as usize, "import.meta is not available in cards".into())),
-        _ => None,
-    }));
-    let scoping = semantic.semantic.into_scoping();
-    let mut imports = Vec::new();
-    let importer_dir = rel.rsplit_once('/').map_or("", |(dir, _)| dir);
-    for statement in parsed.program.body.iter_mut() {
-        let source = match statement {
-            ast::Statement::ImportDeclaration(d) => &mut d.source,
-            ast::Statement::ExportAllDeclaration(d) => &mut d.source,
-            ast::Statement::ExportFromDeclaration(d) => &mut d.source,
-            _ => continue,
-        };
-        let spec = source.value.as_str().unwrap_or_default();
-        match resolve_import(importer_dir, spec, modules) {
-            Ok(Import::Runtime) => {}
-            Ok(Import::Lib(target)) => {
-                source.value = alloc.alloc_str(&target).into();
-                imports.push(target);
-            }
-            Err(message) => errors.push((source.span.start as usize, message)),
-        }
-    }
-    if !errors.is_empty() {
-        return Err(errors);
-    }
-    let transformed = Transformer::new(&alloc, Path::new(rel), &TransformOptions::default())
-        .build_with_scoping(scoping, &mut parsed.program);
-    if !transformed.diagnostics.is_empty() {
-        return Err(located(&transformed.diagnostics));
-    }
-    ModuleRunnerTransform::new().transform(&alloc, &mut parsed.program, transformed.scoping);
-    Ok(CompiledModule { js: Codegen::new().build(&parsed.program).code, imports })
 }
 
+fn compile(rel: &str, importer_dir: &str, text: &str, text_hash: String, modules: &BTreeSet<String>) -> Compiled {
+    let mut resolved = Vec::new();
+    let result: Result<CompiledModule, Vec<(usize, String)>> = 'compile: {
+        let alloc = Allocator::default();
+        let mut parsed = Parser::new(&alloc, text, SourceType::from_path(rel).unwrap_or_default()).parse();
+        let located = |diagnostics: &[OxcDiagnostic]| -> Vec<(usize, String)> {
+            diagnostics
+                .iter()
+                .map(|e| (e.labels.first().map_or(0, |l| l.offset() as usize), e.message.to_string()))
+                .collect()
+        };
+        if !parsed.diagnostics.is_empty() {
+            break 'compile Err(located(&parsed.diagnostics));
+        }
+        let semantic =
+            SemanticBuilder::new().with_check_syntax_error(true).with_build_nodes(true).build(&parsed.program);
+        let mut errors = located(&semantic.diagnostics);
+        errors.extend(semantic.semantic.nodes().iter().filter_map(|n| match n.kind() {
+            AstKind::ImportExpression(e) => {
+                Some((e.span.start as usize, "dynamic import() is not supported: use a static import".into()))
+            }
+            AstKind::ImportMeta(m) => Some((m.span.start as usize, "import.meta is not available in cards".into())),
+            _ => None,
+        }));
+        let scoping = semantic.semantic.into_scoping();
+        let mut imports = Vec::new();
+        for statement in parsed.program.body.iter_mut() {
+            let source = match statement {
+                ast::Statement::ImportDeclaration(d) => &mut d.source,
+                ast::Statement::ExportAllDeclaration(d) => &mut d.source,
+                ast::Statement::ExportFromDeclaration(d) => &mut d.source,
+                _ => continue,
+            };
+            let spec = source.value.as_str().unwrap_or_default();
+            let import = resolve_import(importer_dir, spec, modules);
+            resolved.push((spec.to_string(), import.clone()));
+            match import {
+                Ok(Import::Runtime) => {}
+                Ok(Import::Lib(target)) => {
+                    source.value = alloc.alloc_str(&target).into();
+                    imports.push(target);
+                }
+                Err(message) => errors.push((source.span.start as usize, message)),
+            }
+        }
+        if !errors.is_empty() {
+            break 'compile Err(errors);
+        }
+        let transformed = Transformer::new(&alloc, Path::new(rel), &TransformOptions::default())
+            .build_with_scoping(scoping, &mut parsed.program);
+        if !transformed.diagnostics.is_empty() {
+            break 'compile Err(located(&transformed.diagnostics));
+        }
+        ModuleRunnerTransform::new().transform(&alloc, &mut parsed.program, transformed.scoping);
+        let js = Codegen::new().with_options(CodegenOptions::minify()).build(&parsed.program).code;
+        Ok(CompiledModule::new(js, imports))
+    };
+    let (module, errors) = match result {
+        Ok(module) => (module, Vec::new()),
+        Err(errors) => {
+            let path = format!("cards/{rel}");
+            let errors: Vec<(String, String)> =
+                errors.into_iter().map(|(offset, message)| (location(&path, text, offset), message)).collect();
+            let thrown: Vec<String> = errors.iter().map(|(at, message)| format!("{at}: {message}")).collect();
+            let js = format!("throw new Error({})", serde_json::to_string(&thrown.join("\n")).unwrap());
+            (CompiledModule::new(js, Vec::new()), errors)
+        }
+    };
+    Compiled { text_hash, resolved, module, errors }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 enum Import {
     /// Provided by the webview.
     Runtime,

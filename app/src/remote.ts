@@ -41,6 +41,8 @@ const SUSPENDED_MS = 5000
 const AS_OF_KEY = 'switchboard.as_of'
 /** How often a visible app tells the desktop so; the desktop forgets it after 25 s, so a phone frozen in the background gets pushes again. */
 const PRESENCE_MS = 10000
+/** Values kept meanwhile, such as rows pushed often, are written together, the latest of each. */
+const KEEP_MS = 1000
 
 let status: Status = {
   connection: 'online',
@@ -77,10 +79,10 @@ export const useRemoteStatus = () =>
 
 let database: Promise<IDBDatabase> | undefined
 
-/** Version 2 keeps digests with the cache, so older entries are dropped. */
+/** Version 3 keeps cards' code once by hash, so older entries are dropped. */
 const openDatabase = () =>
   new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open('switchboard', 2)
+    const request = indexedDB.open('switchboard', 3)
     request.onupgradeneeded = event => {
       if (event.oldVersion < 1) {
         request.result.createObjectStore('cache')
@@ -91,35 +93,148 @@ const openDatabase = () =>
     request.onerror = () => reject(request.error)
   })
 
-async function store<T>(name: 'cache' | 'outbox', use: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
-  const transaction = (await (database ??= openDatabase())).transaction(name, 'readwrite')
-  const request = use(transaction.objectStore(name))
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve(request.result)
-    transaction.onerror = () => reject(transaction.error)
+/** A transaction on one store, and its commit. */
+async function begin(name: 'cache' | 'outbox', mode: IDBTransactionMode = 'readwrite') {
+  const transaction = (await (database ??= openDatabase())).transaction(name, mode)
+  const committed = new Promise<void>((resolve, reject) => {
+    transaction.oncomplete = () => resolve()
+    transaction.onerror = transaction.onabort = () => reject(transaction.error)
   })
+  committed.catch(() => {})
+  return { store: transaction.objectStore(name), committed }
 }
 
-type CachedConfig = { hash: string; config: Config }
-type CachedCard = { name: string; hash: string; modules: CardModules }
-type CachedRows = { hash: string; rows: Row[] }
+async function store<T>(name: 'cache' | 'outbox', use: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+  const { store, committed } = await begin(name)
+  const request = use(store)
+  await committed
+  return request.result
+}
 
-const cached = <T>(key: string) => store<T | undefined>('cache', s => s.get(key)).catch(() => undefined)
-const keep = (key: string, value: unknown) => store('cache', s => s.put(value, key)).catch(() => {})
+const done = <T>(request: IDBRequest<T>) =>
+  new Promise<T>((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+
+type CachedConfig = { hash: string; config: Config }
+/** `modules` are the card's module ids to the hash of their code, which is kept once under `code:<hash>`. */
+type CachedCard = { name: string; hash: string; modules: Record<string, string> }
+type CachedRows = { hash: string; rows: Row[] }
+const CARDS = IDBKeyRange.bound('card:', 'card:\uffff')
+const CODE = IDBKeyRange.bound('code:', 'code:\uffff')
+
+/** Values kept but not written yet, which reads see first. */
+const unkept = new Map<string, unknown>()
+let keepTimer: ReturnType<typeof setTimeout> | undefined
+
+const cached = <T>(key: string): Promise<T | undefined> =>
+  unkept.has(key)
+    ? Promise.resolve(unkept.get(key) as T)
+    : store<T | undefined>('cache', s => s.get(key)).catch(() => undefined)
+
+function keep(key: string, value: unknown) {
+  unkept.set(key, value)
+  keepTimer ??= setTimeout(writeKept, KEEP_MS)
+}
+
+function writeKept() {
+  clearTimeout(keepTimer)
+  keepTimer = undefined
+  const batch = [...unkept]
+  unkept.clear()
+  if (batch.length) store('cache', s => batch.map(([key, value]) => s.put(value, key)).at(-1)!).catch(() => {})
+}
 
 async function loadOutbox() {
   const items = await store<Queued[]>('outbox', s => s.getAll())
   setStatus({ outbox: items.sort((a, b) => a.at - b.at) })
 }
 
-/** The digests of the cached config and cards, which a resync sends so that the desktop skips them. */
+/** The digests of the cached config and cards and the hashes of the cached code, which a resync sends so that the desktop skips them. */
 let configHash: string | undefined
-const cardHashes: Record<string, string> = {}
+let cardHashes: Record<string, string> = {}
+let codeHashes = new Set<string>()
 const hydrated = (async () => {
   configHash = (await cached<CachedConfig>('config'))?.hash
-  const cards = await store<CachedCard[]>('cache', s => s.getAll(IDBKeyRange.bound('card:', 'card:￿'))).catch(() => [])
-  for (const card of cards) cardHashes[card.name] = card.hash
+  const cards = await store<CachedCard[]>('cache', s => s.getAll(CARDS)).catch(() => [])
+  cardHashes = Object.fromEntries(cards.map(card => [card.name, card.hash]))
+  const code = await store('cache', s => s.getAllKeys(CODE)).catch(() => [])
+  codeHashes = new Set(code.map(key => String(key).slice('code:'.length)))
 })()
+
+/** Cached code by hash, read once however many cards use it; dropped when the stored code is dropped or replaced. */
+const codeReads = new Map<string, Promise<string | undefined>>()
+
+function readCode(cache: IDBObjectStore, hash: string) {
+  let read = codeReads.get(hash)
+  if (!read) codeReads.set(hash, (read = done<string | undefined>(cache.get(`code:${hash}`))))
+  return read
+}
+
+/** The card's modules with their code, or `undefined` if `code` lacks some of it. */
+function expandCard(modules: CachedCard['modules'], code: Map<string, string | undefined>) {
+  const expanded: CardModules = {}
+  for (const [id, hash] of Object.entries(modules)) {
+    const text = code.get(hash)
+    if (text === undefined) return undefined
+    expanded[id] = text
+  }
+  return expanded
+}
+
+const readAll = (cache: IDBObjectStore, hashes: Iterable<string>) =>
+  Promise.all([...hashes].map(async hash => [hash, await readCode(cache, hash)] as const))
+
+/** A cached card with its code, read in one transaction so that dropping unused code cannot come in between. */
+export async function cachedCard(name: string): Promise<CardModules | undefined> {
+  const { store: cache } = await begin('cache', 'readonly')
+  const card = await done<CachedCard | undefined>(cache.get(`card:${name}`))
+  if (!card) return undefined
+  return expandCard(card.modules, new Map(await readAll(cache, new Set(Object.values(card.modules)))))
+}
+
+/**
+ * Keeps the cards and code a resync sent, and drops the cards no longer in `config` and the code no card uses, in one
+ * transaction, so that a cached card never lacks its code. Returns the changed cards with their code.
+ */
+export async function storeCards(reply: ResyncReply, config: Config | undefined): Promise<Record<string, CardModules>> {
+  const { store: cache, committed } = await begin('cache')
+  const needed = new Set(Object.values(reply.cards).flatMap(card => Object.values(card.modules)))
+  const stored = await readAll(
+    cache,
+    [...needed].filter(hash => !(hash in reply.code)),
+  )
+  const known = new Map<string, string | undefined>([...Object.entries(reply.code), ...stored])
+  const changed: Record<string, CardModules> = {}
+  for (const [name, card] of Object.entries(reply.cards)) {
+    const modules = expandCard(card.modules, known)
+    if (modules) changed[name] = modules
+    else requestResync()
+  }
+  for (const [hash, text] of Object.entries(reply.code)) {
+    cache.put(text, `code:${hash}`)
+    codeReads.delete(hash)
+  }
+  for (const [name, { hash, modules }] of Object.entries(reply.cards))
+    if (changed[name]) cache.put({ name, hash, modules }, `card:${name}`)
+  const cards = await done<CachedCard[]>(cache.getAll(CARDS))
+  const inConfig = (card: CachedCard) => !config || config.cards.includes(card.name)
+  const kept = cards.filter(inConfig)
+  for (const card of cards) if (!inConfig(card)) cache.delete(`card:${card.name}`)
+  const used = new Set(kept.flatMap(card => Object.values(card.modules)))
+  const present = (await done(cache.getAllKeys(CODE))).map(key => String(key).slice('code:'.length))
+  for (const hash of present.filter(hash => !used.has(hash))) {
+    cache.delete(`code:${hash}`)
+    codeReads.delete(hash)
+  }
+  try {
+    await committed
+    cardHashes = Object.fromEntries(kept.map(card => [card.name, card.hash]))
+    codeHashes = new Set(present.filter(hash => used.has(hash)))
+  } catch {}
+  return changed
+}
 
 let caughtUp: () => void
 /** Resolves once the first stream has caught up, for reads the cache cannot answer. */
@@ -293,10 +408,12 @@ function emit<E extends keyof Events>(event: E, payload: Events[E]) {
 let applied: Promise<unknown> = Promise.resolve()
 const afterApplied = (apply: () => unknown) => (applied = applied.then(apply).catch(() => {}))
 
-type ResyncReply = {
+export type ResyncReply = {
   config: Config | null
   config_hash: string
-  cards: Record<string, { hash: string; modules: CardModules }>
+  cards: Record<string, { hash: string; modules: Record<string, string> }>
+  /** The code of the cards' modules whose hash the resync did not list. */
+  code: Record<string, string>
   subs: { local: number; id?: number; hash?: string; rows?: Row[] | null; error?: string }[]
 }
 
@@ -328,6 +445,7 @@ async function resync(previous?: string) {
     previous: previous || undefined,
     config: configHash,
     cards: cardHashes,
+    modules: [...codeHashes],
     subs: ids.flatMap(local => {
       const sub = subs.get(local)
       return sub ? [{ local, name: sub.name, params: sub.params, hash: sub.hash }] : []
@@ -361,11 +479,6 @@ function apply(reply: ResyncReply) {
     applyTimeouts(reply.config)
     changes.config = reply.config
   }
-  for (const [name, { hash, modules }] of Object.entries(reply.cards)) {
-    keep(`card:${name}`, { name, hash, modules })
-    cardHashes[name] = hash
-    changes.cards[name] = modules
-  }
   for (const { local, id, hash, rows, error } of reply.subs) {
     const sub = subs.get(local)
     if (!sub) {
@@ -386,12 +499,16 @@ function apply(reply: ResyncReply) {
     if (wait) wait.resolve(rows)
     else changes.rows.push({ id: local, rows })
   }
+  const cards = Object.keys(reply.cards).length
   timings.phases.push([
-    `changed config:${Number(!!reply.config)} cards:${Object.keys(changes.cards).length} rows:${changes.rows.length}`,
+    `changed config:${Number(!!reply.config)} cards:${cards} rows:${changes.rows.length}`,
     Date.now() - timings.at,
   ])
-  if (changes.config || changes.rows.length || Object.keys(changes.cards).length)
-    afterApplied(() => emit('resync', changes))
+  afterApplied(async () => {
+    if (reply.config || cards || Object.keys(reply.code).length)
+      changes.cards = await storeCards(reply, reply.config ?? undefined)
+    if (changes.config || changes.rows.length || cards) await emit('resync', changes)
+  })
   for (const push of early.values()) if (byServer.has(push.id)) pushed(push)
   early.clear()
   return applied
@@ -528,24 +645,19 @@ function applyTimeouts(config: Config) {
 }
 
 /** Answers from the cache, or once the first stream has caught up if it holds nothing yet. */
-async function fromCache<T>(key: string): Promise<T | undefined> {
-  const hit = await cached<T>(key)
-  if (hit) return hit
-  await firstSync
-  return cached<T>(key)
-}
+const fromCache = async <T>(read: () => Promise<T | undefined>) => (await read()) ?? (await firstSync.then(read))
 
 const handlers: { [C in keyof Commands]: (args: Commands[C]['args']) => Promise<Commands[C]['result']> } = {
   config: async () => {
-    const entry = await fromCache<CachedConfig>('config')
+    const entry = await fromCache(() => cached<CachedConfig>('config'))
     if (!entry) throw new Error('the desktop sent no config')
     applyTimeouts(entry.config)
     return entry.config
   },
   card: async ({ name }) => {
-    const entry = await fromCache<CachedCard>(`card:${name}`)
-    if (!entry) throw new Error(`no card named ${name}`)
-    return entry.modules
+    const modules = await fromCache(() => cachedCard(name).catch(() => undefined))
+    if (!modules) throw new Error(`no card named ${name}`)
+    return modules
   },
   subscribe: async ({ name, params }) => {
     const id = ++subIds
@@ -627,6 +739,7 @@ export function connect(): Backend {
   document.addEventListener('visibilitychange', () => {
     presence()
     if (document.visibilityState !== 'visible') {
+      writeKept()
       hiddenAt = Date.now()
       for (const attempt of attempts) attempt.controller.abort()
       attempts.clear()

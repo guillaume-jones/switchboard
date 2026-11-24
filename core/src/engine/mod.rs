@@ -5,13 +5,13 @@ mod reads;
 mod triggers;
 mod writes;
 
-use crate::loader::{BUILTINS, Diagnostic, Loaded, Mode, SystemEvent, load, load_core_only};
+use crate::loader::{BUILTINS, Diagnostic, Loaded, Mode, SystemEvent, load, load_core_only, reload};
 use anyhow::{Context, Result, anyhow, bail};
 use notify::{RecursiveMode, Watcher};
 use reads::{ReaderPool, Refresh, Subscriptions};
 use rusqlite::Connection;
 use serde_json::{Map, Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -338,7 +338,7 @@ impl Shared {
             return;
         }
         self.reload_pending.store(false, SeqCst);
-        let loaded = match load(&self.home, Mode::Apply) {
+        let loaded = match reload(&self.home, Mode::Apply, &self.loaded()) {
             Ok(loaded) => Arc::new(loaded),
             Err(diagnostics) => {
                 {
@@ -581,11 +581,26 @@ impl Engine {
         })
     }
 
+    /// The card's modules, by path relative to `cards/` → their code.
     pub fn card(&self, name: &str) -> Result<Value> {
-        match self.shared.loaded().cards.get(name) {
-            Some(bundle) => Ok(json!(bundle)),
-            None => bail!("no card named {name}"),
-        }
+        let loaded = self.shared.loaded();
+        let Some(bundle) = loaded.cards.get(name) else { bail!("no card named {name}") };
+        let modules: BTreeMap<&str, &str> =
+            bundle.iter().map(|(id, hash)| (id.as_str(), &*loaded.card_code[hash])).collect();
+        Ok(json!(modules))
+    }
+
+    /// Every card's modules, by path relative to `cards/` → the hash of their code, and the code whose hash is not in
+    /// `have`.
+    pub fn cards(&self, have: &HashSet<&str>) -> Value {
+        let loaded = self.shared.loaded();
+        let code: BTreeMap<&str, &str> = loaded
+            .card_code
+            .iter()
+            .filter(|(hash, _)| !have.contains(hash.as_str()))
+            .map(|(hash, code)| (hash.as_str(), &**code))
+            .collect();
+        json!({ "cards": loaded.cards, "code": code })
     }
 
     pub fn revert_last_commit(&self) -> Result<()> {

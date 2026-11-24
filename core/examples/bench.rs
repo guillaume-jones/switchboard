@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::{Duration, Instant};
-use switchboard_core::{Emitter, Engine, Mode, Origin, load};
+use switchboard_core::{Emitter, Engine, Loaded, Mode, Origin, load, reload};
 
 const SOURCES: usize = 20;
 const ROWS: i64 = 10_000;
@@ -92,6 +92,19 @@ fn stats(name: &str, mut samples: Vec<Duration>) {
     );
 }
 
+/// What a device without a cache downloads for every card: each module's code once, and each card's module hashes.
+fn card_payload(name: &str, loaded: &Loaded) {
+    let code: usize = loaded.card_code.values().map(|c| json!(&**c).to_string().len()).sum();
+    let manifests = json!(loaded.cards).to_string().len();
+    println!(
+        "{name}: {} cards, {} modules: {} KB of code + {} KB of hashes",
+        loaded.cards.len(),
+        loaded.card_code.len(),
+        code / 1024,
+        manifests / 1024
+    );
+}
+
 fn wait(rx: &Receiver<(Instant, u64)>, mut ids: Vec<u64>, start: Instant) -> Vec<(u64, Duration)> {
     let mut out = Vec::new();
     while !ids.is_empty() {
@@ -159,6 +172,31 @@ fn main() {
             })
             .collect(),
     );
+    let big: String =
+        (0..20_000).map(|i| format!("export const v{i} = {{ id: {i}, label: \"value {i}\" }}\n")).collect();
+    fs::write(home.join("cards/lib/big.js"), big).unwrap();
+    for i in 0..3 {
+        let card = format!("import {{ v1 }} from \"./lib/big\"\nexport default () => v1.label + {i}\n");
+        fs::write(home.join(format!("cards/B{i}.tsx")), card).unwrap();
+    }
+    let previous = load(&home, Mode::Apply).unwrap();
+    stats(
+        "reload(Apply), + 1 MB lib in 3 cards, no changes",
+        (0..20)
+            .map(|_| {
+                let t = Instant::now();
+                reload(&home, Mode::Apply, &previous).unwrap();
+                t.elapsed()
+            })
+            .collect(),
+    );
+    card_payload("cards of the synthetic folder", &previous);
+    if let Ok(folder) = std::env::var("SWB_BENCH_CARDS") {
+        let t = Instant::now();
+        let loaded = load(Path::new(&folder), Mode::Check).unwrap();
+        println!("load(Check) of {folder}: {:.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+        card_payload(&folder, &loaded);
+    }
     fs::remove_dir_all(home.join("cards")).unwrap();
     stats(
         "Engine::open             target < 300 ms",

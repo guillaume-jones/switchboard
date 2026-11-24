@@ -8,13 +8,13 @@ let config: Config | Error | undefined
 let latestRequest = 0
 const listeners = new Set<() => void>()
 
-/** Publishes only once every card is loaded, so slots render without suspending. */
+/** Publishes once the root card is loaded, then loads the others meanwhile, so startup does not grow with the folder. */
 async function reload() {
   const request = ++latestRequest
   let next: Config | Error
   try {
     next = await bridge.config()
-    await Promise.allSettled(next.cards.map(name => loadCard(name).component))
+    await loadCard(next.root).component.catch(() => {})
   } catch (error) {
     next = bridge.toError(error)
   }
@@ -24,6 +24,7 @@ async function reload() {
 function publish(next: Config | Error) {
   config = next
   for (const listener of listeners) listener()
+  if (!(next instanceof Error)) for (const name of next.cards) loadCard(name)
 }
 
 let resyncs = Promise.resolve()
@@ -32,7 +33,7 @@ let resyncs = Promise.resolve()
 bridge.on('resync', ({ config: changed, cards, rows }) => {
   resyncs = resyncs.then(async () => {
     const swap = await prepareCards(cards)
-    if (changed) await Promise.allSettled(changed.cards.map(name => loadCard(name).component))
+    if (changed) await loadCard(changed.root).component.catch(() => {})
     swap()
     if (changed) {
       latestRequest++

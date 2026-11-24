@@ -34,7 +34,6 @@ test: | app/node_modules
 
 bench: sidecar | app/node_modules
 	cargo run --release --example bench -p switchboard-core
-	cd app && npm run bench
 
 fmt: | app/node_modules
 	cd app && npm run fmt
